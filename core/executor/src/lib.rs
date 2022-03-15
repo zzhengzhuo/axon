@@ -6,11 +6,14 @@ mod debugger;
 #[cfg(test)]
 mod tests;
 
+mod precompile;
+
 use std::collections::BTreeMap;
 
 use evm::executor::stack::{MemoryStackState, StackExecutor, StackSubstateMetadata};
 
 use common_merkle::Merkle;
+use precompile::AxonPrecompiles;
 use protocol::codec::ProtocolCodec;
 use protocol::traits::{ApplyBackend, Backend, Executor, ExecutorAdapter as Adapter};
 use protocol::types::{
@@ -35,7 +38,7 @@ impl Executor for EvmExecutor {
         let config = Config::london();
         let metadata = StackSubstateMetadata::new(u64::MAX, &config);
         let state = MemoryStackState::new(metadata, backend);
-        let precompiles = BTreeMap::new();
+        let precompiles = AxonPrecompiles::new();
         let mut executor = StackExecutor::new_with_precompiles(state, &config, &precompiles);
         let (exit_reason, ret) = executor.transact_call(
             Default::default(),
