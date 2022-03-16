@@ -8,8 +8,6 @@ mod tests;
 
 mod precompile;
 
-use std::collections::BTreeMap;
-
 use evm::executor::stack::{MemoryStackState, StackExecutor, StackSubstateMetadata};
 
 use common_merkle::Merkle;

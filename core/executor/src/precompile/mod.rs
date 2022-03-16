@@ -4,9 +4,10 @@ use evm::{
 };
 use primitive_types::H160;
 
-use self::{ecrecover::ECRecover, sha256::Sha256};
+use self::{ecrecover::ECRecover, rsa::Rsa, sha256::Sha256};
 
 pub(crate) mod ecrecover;
+pub(crate) mod rsa;
 pub(crate) mod sha256;
 
 pub type PrecompileResult = Result<PrecompileOutput, PrecompileFailure>;
@@ -128,6 +129,7 @@ impl PrecompileSet for AxonPrecompiles {
                 todo!()
             }
             a if a == hash(1025) => todo!(),
+            a if a == hash(0xf4) => Some(Rsa::execute(input, gas_limit, context, is_static)),
             _ => None,
         }
     }
