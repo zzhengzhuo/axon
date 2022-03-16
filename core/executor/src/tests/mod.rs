@@ -1,4 +1,5 @@
 mod test_ecrecover;
+mod test_sha256;
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
