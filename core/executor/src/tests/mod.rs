@@ -1,3 +1,5 @@
+mod test_ecrecover;
+
 use std::collections::BTreeMap;
 use std::str::FromStr;
 

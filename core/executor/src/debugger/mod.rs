@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-mod uniswap2;
+pub(crate) mod uniswap2;
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -4,9 +4,10 @@ use evm::{
 };
 use primitive_types::H160;
 
-use self::ecrecover::ECRecover;
+use self::{ecrecover::ECRecover, sha256::Sha256};
 
-pub mod ecrecover;
+pub(crate) mod ecrecover;
+pub(crate) mod sha256;
 
 pub type PrecompileResult = Result<PrecompileOutput, PrecompileFailure>;
 pub trait Precompile {
@@ -22,7 +23,7 @@ pub trait Precompile {
     ) -> PrecompileResult;
 }
 
-pub mod LinearCostPrecompile {
+pub mod linear_cost_precompile {
     use super::*;
     pub trait LinearCostPrecompile {
         const BASE: u64;
@@ -118,7 +119,7 @@ impl PrecompileSet for AxonPrecompiles {
         match address {
             // Ethereum precompiles :
             a if a == hash(1) => Some(ECRecover::execute(input, gas_limit, context, is_static)),
-            a if a == hash(2) => todo!(),
+            a if a == hash(2) => Some(Sha256::execute(input, gas_limit, context, is_static)),
             a if a == hash(3) => todo!(),
             a if a == hash(4) => todo!(),
             a if a == hash(5) => todo!(),

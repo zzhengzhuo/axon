@@ -21,9 +21,10 @@ rocksdb = { version = "0.16", package = "ckb-rocksdb" }
 
 common-apm = { path = "../../common/apm" }
 common-merkle = { path = "../../common/merkle" }
-common-crypto = {path = "../../common/crypto"}
+common-crypto = { path = "../../common/crypto" }
 protocol = { path = "../../protocol", package = "axon-protocol" }
 
+sha2 = "0.10"
 
 [dev-dependencies]
 common-crypto = { path = "../../common/crypto" }
@@ -35,6 +36,13 @@ ethabi-contract = "16.0"
 ethabi-derive = "16.0"
 getrandom = "0.2"
 tempfile = "3.3"
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+ethcontract = "0.17"
+
+wild_rand = {package = "rand",version = "0.7"}
 
 [[bench]]
 name = "bench_transfer"

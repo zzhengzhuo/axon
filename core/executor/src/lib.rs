@@ -113,7 +113,7 @@ impl EvmExecutor {
         let config = Config::london();
         let metadata = StackSubstateMetadata::new(u64::MAX, &config);
         let state = MemoryStackState::new(metadata, backend);
-        let precompiles = BTreeMap::new();
+        let precompiles = AxonPrecompiles::new();
         let mut executor = StackExecutor::new_with_precompiles(state, &config, &precompiles);
         let (exit_reason, ret) = match tx.transaction.unsigned.action {
             TransactionAction::Call(addr) => executor.transact_call(

@@ -25,7 +25,7 @@ use super::*;
 const PAIR_INIT_CODE_HASH: &str =
     "f8b6d1d8e3b05a01c9235ebfcb119fab138bc18a3baaf65e5405861e9a2a60c8";
 
-fn read_code(path: &str) -> String {
+pub(crate) fn read_code(path: &str) -> String {
     let file = File::open(path).unwrap();
     let mut buf_reader = BufReader::new(file);
     let mut contents = String::new();
@@ -33,7 +33,7 @@ fn read_code(path: &str) -> String {
     contents.trim().to_string()
 }
 
-fn construct_tx(action: TransactionAction, value: U256, data: Vec<u8>) -> Transaction {
+pub(crate) fn construct_tx(action: TransactionAction, value: U256, data: Vec<u8>) -> Transaction {
     Transaction {
         nonce: U256::default(),
         max_priority_fee_per_gas: U256::default(),
@@ -54,7 +54,7 @@ fn deploy_factory(
     setter: H160,
 ) -> H160 {
     println!("######## Deploy factory contract");
-    let factory_code = hex_decode(&read_code("./res/factory_code.txt")).unwrap();
+    let factory_code = hex_decode(&read_code("core/executor/res/in_ecrecover_code.txt")).unwrap();
     let deploy_data = factory_constructor(factory_code, setter);
 
     let tx = construct_tx(TransactionAction::Create, U256::default(), deploy_data);

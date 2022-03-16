@@ -4,7 +4,7 @@ use common_crypto::secp256k1_recover;
 use evm::{executor::stack::PrecompileFailure, ExitSucceed};
 use protocol::types::Hasher;
 
-use super::LinearCostPrecompile::LinearCostPrecompile;
+use super::linear_cost_precompile::LinearCostPrecompile;
 
 #[derive(Debug)]
 pub struct ECRecover;
@@ -25,13 +25,16 @@ impl LinearCostPrecompile for ECRecover {
         sig[32..64].copy_from_slice(&input[96..128]);
         sig[64] = input[63];
 
-        let result = match secp256k1_recover(&sig, &msg) {
+        let result = match secp256k1_recover(&msg, &sig) {
             Ok(pubkey) => {
-                let mut address = Hasher::digest(&pubkey.serialize_uncompressed()).0;
+                let mut address = Hasher::digest(&pubkey.serialize_uncompressed()[1..]).0;
                 address[0..12].copy_from_slice(&[0u8; 12]);
                 address.to_vec()
             }
-            Err(_) => [0u8; 0].to_vec(),
+            Err(e) => {
+                println!("error: {}", e);
+                [0u8; 0].to_vec()
+            }
         };
 
         Ok((ExitSucceed::Returned, result))
