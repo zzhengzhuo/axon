@@ -1181,6 +1181,7 @@ dependencies = [
 name = "core-executor"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axon-protocol",
  "cita_trie",
  "ckb-rocksdb",
@@ -1191,6 +1192,7 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "dashmap",
+ "email-rs",
  "ethabi 16.0.0",
  "ethabi-contract",
  "ethabi-derive",
@@ -1757,6 +1759,15 @@ dependencies = [
  "rand_core 0.6.3",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "email-rs"
+version = "0.1.0"
+source = "git+https://github.com/sking789/email-rs.git?branch=multi-dkim-header#9991035d76caf894b9b43a06b35dbecf7d281ef8"
+dependencies = [
+ "base64 0.13.0",
+ "quoted_printable",
 ]
 
 [[package]]
@@ -4134,6 +4145,11 @@ checksum = "864d3e96a899863136fc6e99f3d7cae289dafe43bf2c5ac19b70df7210c0a145"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "quoted_printable"
+version = "0.4.3"
+source = "git+https://github.com/zzhengzhuo/quoted-printable.git#05a4fceebeeb175e8b0f3cc2a656bd1ddf1a3f09"
 
 [[package]]
 name = "radium"

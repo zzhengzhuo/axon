@@ -4,9 +4,10 @@ use evm::{
 };
 use primitive_types::H160;
 
-use self::{ecrecover::ECRecover, rsa::Rsa, sha256::Sha256};
+use self::{ecrecover::ECRecover, email_parse::EmailParse, rsa::Rsa, sha256::Sha256};
 
 pub(crate) mod ecrecover;
+pub(crate) mod email_parse;
 pub(crate) mod rsa;
 pub(crate) mod sha256;
 
@@ -130,6 +131,7 @@ impl PrecompileSet for AxonPrecompiles {
             }
             a if a == hash(1025) => todo!(),
             a if a == hash(0xf4) => Some(Rsa::execute(input, gas_limit, context, is_static)),
+            a if a == hash(0xf5) => Some(EmailParse::execute(input, gas_limit, context, is_static)),
             _ => None,
         }
     }

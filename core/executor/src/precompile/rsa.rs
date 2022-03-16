@@ -11,8 +11,6 @@ impl LinearCostPrecompile for Rsa {
     const WORD: u64 = 0;
 
     fn execute(i: &[u8], _: u64) -> Result<(ExitSucceed, Vec<u8>), PrecompileFailure> {
-        println!("rsa input: {:?}", i);
-
         let e = BigUint::from_bytes_be(&i[0..4]);
         let n_len =
             u32::from_be_bytes(i[4..8].try_into().map_err(|_| PrecompileFailure::Error {

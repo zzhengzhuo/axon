@@ -27,6 +27,9 @@ protocol = { path = "../../protocol", package = "axon-protocol" }
 sha2 = "0.10"
 rsa = "0.5"
 
+email-rs = { git = "https://github.com/sking789/email-rs.git", branch = "multi-dkim-header" }
+anyhow = "1.0"
+
 [dev-dependencies]
 common-crypto = { path = "../../common/crypto" }
 
@@ -43,7 +46,7 @@ serde_json = "1.0"
 
 ethcontract = "0.17"
 
-wild_rand = {package = "rand",version = "0.7"}
+wild_rand = { package = "rand", version = "0.7" }
 num-traits = "0.2"
 
 [[bench]]

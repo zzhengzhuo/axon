@@ -1,6 +1,7 @@
 mod test_ecrecover;
-mod test_sha256;
+mod test_email_dkim;
 mod test_rsa;
+mod test_sha256;
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
