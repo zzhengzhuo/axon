@@ -61,7 +61,7 @@ async fn test_rsa() {
     let sig = private
         .sign(rsa::PaddingScheme::PKCS1v15Sign { hash: None }, message)
         .unwrap();
-    let n = public_key.n().to_bytes_be();
+    let n = public_key.n().to_bytes_le();
     let e = public_key.e().to_u32().unwrap();
 
     let input = in_rsa::functions::validate::encode_input(e, n, message.as_ref(), sig);
