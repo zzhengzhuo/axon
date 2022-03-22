@@ -7,7 +7,7 @@ use protocol::codec::hex_encode;
 use protocol::tokio;
 use protocol::{codec::hex_decode, types::TransactionAction};
 use rand::thread_rng;
-use rsa::{PublicKeyParts, RsaPrivateKey, RsaPublicKey};
+use rsa::{PublicKeyParts, RsaPrivateKey, RsaPublicKey, Hash};
 
 use crate::debugger::{
     mock_signed_tx,
@@ -59,9 +59,9 @@ async fn test_rsa() {
     let public_key = RsaPublicKey::from(&private);
 
     let sig = private
-        .sign(rsa::PaddingScheme::PKCS1v15Sign { hash: None }, message)
+        .sign(rsa::PaddingScheme::PKCS1v15Sign { hash: Some(Hash::SHA2_256) }, message)
         .unwrap();
-    let n = public_key.n().to_bytes_be();
+    let n = public_key.n().to_bytes_le();
     let e = public_key.e().to_u32().unwrap();
 
     let input = in_rsa::functions::validate::encode_input(e, n, message.as_ref(), sig);

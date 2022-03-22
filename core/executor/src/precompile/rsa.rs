@@ -1,5 +1,5 @@
 use evm::{executor::stack::PrecompileFailure, ExitError, ExitSucceed};
-use rsa::{BigUint, PublicKey, RsaPublicKey};
+use rsa::{BigUint, PublicKey, RsaPublicKey, Hash};
 
 use super::linear_cost_precompile::LinearCostPrecompile;
 
@@ -37,7 +37,7 @@ impl LinearCostPrecompile for Rsa {
         })?;
 
         let result = match pubkey.verify(
-            rsa::PaddingScheme::PKCS1v15Sign { hash: None },
+            rsa::PaddingScheme::PKCS1v15Sign { hash: Some(Hash::SHA2_256) },
             message,
             sig,
         ) {
