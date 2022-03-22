@@ -77,7 +77,7 @@ async fn test_dkim() {
             ParamType::FixedBytes(32),
             ParamType::FixedBytes(32),
             ParamType::FixedBytes(32),
-            ParamType::Bytes,
+            ParamType::FixedBytes(32),
             ParamType::Bytes,
         ],
         &resp.tx_resp[0].ret,
@@ -89,7 +89,7 @@ async fn test_dkim() {
         Token::FixedBytes(subject),
         Token::FixedBytes(selector),
         Token::FixedBytes(sdid),
-        Token::Bytes(message),
+        Token::FixedBytes(dkim_msg),
         Token::Bytes(sig),
     ) = (&ret[0], &ret[1], &ret[2], &ret[3], &ret[4], &ret[5])
     {
@@ -103,15 +103,12 @@ async fn test_dkim() {
         let mut email_from = "517669936@qq.com".to_owned();
         let from_hash = email_from_hash(&mut email_from).unwrap();
         assert_eq!(from, from_hash.as_slice());
-        let mut hasher = Sha256::new();
-        hasher.update(message);
-        let message = hasher.finalize();
         assert!(public_key
             .verify(
                 rsa::PaddingScheme::PKCS1v15Sign {
                     hash: Some(Hash::SHA2_256),
                 },
-                &message,
+                &dkim_msg,
                 sig,
             )
             .is_ok());

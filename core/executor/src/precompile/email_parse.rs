@@ -70,6 +70,9 @@ impl LinearCostPrecompile for EmailParse {
         })?;
 
         let dkim_message = &email.get_dkim_message()[0];
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(dkim_message.as_bytes());
+        let dkim_msg_hash = hasher.finalize();
 
         let Header {
             selector,
@@ -86,21 +89,16 @@ impl LinearCostPrecompile for EmailParse {
             });
         }
 
-        let dkim_message_len_ceil = (dkim_message.len() / 32 + 1) * 32;
-        let signature_len_ceil = signature.len();
-        let mut result = vec![0u8; 32 * 8 + dkim_message_len_ceil + signature_len_ceil];
+        let signature_len = signature.len();
+        let mut result = vec![0u8; 32 * 7 + signature_len];
         result[0..32].copy_from_slice(&from);
         result[32..64].copy_from_slice(&subject[..32]);
         result[64..64 + selector.len()].copy_from_slice(selector.as_bytes());
         result[96..96 + sdid.len()].copy_from_slice(sdid.as_bytes());
-        result[159] = 0xc0;
-        result[188..192].copy_from_slice(&((0xe0 + dkim_message_len_ceil) as u32).to_be_bytes());
-        result[220..224].copy_from_slice(&(dkim_message.len() as u32).to_be_bytes());
-        result[224..224 + dkim_message.len()].copy_from_slice(dkim_message.as_bytes());
-        result[252 + dkim_message_len_ceil..256 + dkim_message_len_ceil]
-            .copy_from_slice(&(signature.len() as u32).to_be_bytes());
-        result[256 + dkim_message_len_ceil..256 + dkim_message_len_ceil + signature.len()]
-            .copy_from_slice(signature);
+        result[128..160].copy_from_slice(&dkim_msg_hash);
+        result[191] = 0xc0;
+        result[220..224].copy_from_slice(&(signature_len as u32).to_be_bytes());
+        result[224..224 + signature_len].copy_from_slice(signature);
 
         Ok((ExitSucceed::Returned, result))
     }

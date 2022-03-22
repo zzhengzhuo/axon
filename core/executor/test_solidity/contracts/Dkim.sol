@@ -11,7 +11,7 @@ contract Dkim {
             bytes32,
             bytes32,
             bytes32,
-            bytes memory,
+            bytes32,
             bytes memory
         )
     {
@@ -38,11 +38,11 @@ contract Dkim {
             bytes32 subject_hash,
             bytes32 dkim_selector,
             bytes32 sdid,
-            bytes memory dkim_sig,
+            bytes32 dkim_sig,
             bytes memory dkim_msg
         ) = abi.decode(
                 output,
-                (bytes32, bytes32, bytes32, bytes32, bytes, bytes)
+                (bytes32, bytes32, bytes32, bytes32, bytes32, bytes)
             );
         return (
             from_hash,

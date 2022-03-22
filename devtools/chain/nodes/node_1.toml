@@ -76,7 +76,8 @@ axon_udt_hash = "0xf32ec1e3274c27ac4cc018c92efec443847e9b78ba8cbedca36f0fa8c35d1
 ckb_uri = "https://mercury-testnet.ckbapp.dev/rpc"
 mercury_uri = "http://127.0.0.1:8116"
 start_block_number = 4096800
-pk = ""
+checkpoint_interval = 1000
+pk = "0x37aa0f893d05914a4def0460c0a984d3611546cfb26924d7a7ca6e0db9950a2d"
 enable = false
 
 admin_address = "0x0000000000000000000000000000000000000000"
