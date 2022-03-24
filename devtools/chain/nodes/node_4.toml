@@ -65,10 +65,11 @@ metrics = true
 [rocksdb]
 max_open_files = 64
 
-# [apm]
-# service_name = "muta"
-# tracing_address = "127.0.0.1:6831"
-# tracing_batch_size = 50
+[apm]
+service_name = "muta"
+tracing_address = "127.0.0.1:6831"
+tracing_batch_size = 50
+prometheus_listening_address = "0.0.0.0:8400"
 
 
 [cross_client]
@@ -76,7 +77,8 @@ axon_udt_hash = "0xf32ec1e3274c27ac4cc018c92efec443847e9b78ba8cbedca36f0fa8c35d1
 ckb_uri = "https://mercury-testnet.ckbapp.dev/rpc"
 mercury_uri = "http://127.0.0.1:8116"
 start_block_number = 4096800
-pk = ""
+pk = "0x69ff51f4c22f30615f68b88efa740f8f1b9169e88842b83d189748d06f1a948e"
+checkpoint_interval = 1000
 enable = false
 
 admin_address = "0x0000000000000000000000000000000000000000"

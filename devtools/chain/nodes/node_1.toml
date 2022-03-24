@@ -52,12 +52,12 @@ light = false
 triedb_cache_size = 2000
 
 [logger]
-filter = "info"
+filter = "warn"
 log_to_console = true
 console_show_file_and_line = false
 log_path = "logs/node_1/"
 log_to_file = true
-file_size_limit = 1073741824 # 1 GiB
+file_size_limit = 1073741824       # 1 GiB
 metrics = true
 # you can specify log level for modules with config below
 # modules_level = { "overlord::state::process" = "debug", core_consensus = "error" }
@@ -65,10 +65,11 @@ metrics = true
 [rocksdb]
 max_open_files = 64
 
-# [apm]
-# service_name = "muta"
-# tracing_address = "127.0.0.1:6831"
-# tracing_batch_size = 50
+[apm]
+service_name = "muta"
+tracing_address = "127.0.0.1:6831"
+tracing_batch_size = 50
+prometheus_listening_address = "0.0.0.0:8100"
 
 
 [cross_client]
