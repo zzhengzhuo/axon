@@ -33,3 +33,9 @@ logs/
 free-space
 
 byzantine/tests/node_modules
+core/executor/*
+devtools/devtools/chain/data/*
+devtools/chain/data1/*
+devtools/chain/data2/*
+devtools/chain/data3/*
+devtools/chain/data4/*
