@@ -197,7 +197,7 @@ impl<Adapter: APIAdapter + 'static> AxonJsonRpcServer for JsonRpcImpl<Adapter> {
             .await
             .map_err(|e| Error::Custom(e.to_string()))?;
 
-        Ok(account.nonce)
+        Ok(account.nonce + 1)
     }
 
     #[metrics_rpc("eth_blockNumber")]
