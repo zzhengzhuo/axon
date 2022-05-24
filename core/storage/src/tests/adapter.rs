@@ -8,19 +8,25 @@ use crate::{CommonHashKey, TransactionSchema};
 #[test]
 fn test_adapter_insert() {
     adapter_insert_test(MemoryAdapter::new());
-    adapter_insert_test(RocksAdapter::new("rocksdb/test_adapter_insert", 64).unwrap())
+    adapter_insert_test(
+        RocksAdapter::new("rocksdb/test_adapter_insert", Default::default()).unwrap(),
+    )
 }
 
 #[test]
 fn test_adapter_batch_modify() {
     adapter_batch_modify_test(MemoryAdapter::new());
-    adapter_batch_modify_test(RocksAdapter::new("rocksdb/test_adapter_batch_modify", 64).unwrap())
+    adapter_batch_modify_test(
+        RocksAdapter::new("rocksdb/test_adapter_batch_modify", Default::default()).unwrap(),
+    )
 }
 
 #[test]
 fn test_adapter_remove() {
     adapter_remove_test(MemoryAdapter::new());
-    adapter_remove_test(RocksAdapter::new("rocksdb/test_adapter_remove", 64).unwrap())
+    adapter_remove_test(
+        RocksAdapter::new("rocksdb/test_adapter_remove", Default::default()).unwrap(),
+    )
 }
 
 fn adapter_insert_test(db: impl StorageAdapter) {
@@ -29,7 +35,7 @@ fn adapter_insert_test(db: impl StorageAdapter) {
     exec!(db.insert::<TransactionSchema>(tx_key.clone(), stx.clone()));
     let stx = exec!(db.get::<TransactionSchema>(tx_key)).unwrap();
 
-    assert!(stx.transaction.check_hash());
+    assert!(stx.transaction.check_hash().is_ok());
 }
 
 fn adapter_batch_modify_test(db: impl StorageAdapter) {

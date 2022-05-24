@@ -1,4 +1,7 @@
 name: E2E Tests
+concurrency:
+  group: E2E Tests-${{ github.ref }}
+  cancel-in-progress: true
 on:
   push:
     branches:
@@ -6,20 +9,39 @@ on:
   pull_request:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-
+  prologue:
+    name: prologue
+    runs-on: ubuntu-20.04
+    outputs:
+      job_skip: ${{ steps.prologue.outputs.job_skip }}
     steps:
     - uses: actions/checkout@v3
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v3
+    - name: prologue
+      id: prologue
+      uses: ./.github/actions/ci_prologue
       with:
-        node-version: '16'
-        cache: 'yarn'
-        cache-dependency-path: 'tests/e2e/yarn.lock'
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        PR_COMMONS_BODY: "${{ github.event.pull_request.body }}"
+        GITHUB_WORKFLOW: ${{ github.workflow }}
+  build:
+    needs: prologue
+    runs-on: ubuntu-latest
+    if: needs.prologue.outputs.job_skip == 'run'
+    steps:
+      - uses: actions/checkout@v3
+      - uses: lyricwulf/abc@v1
+        with: 
+          linux: m4
+      
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          cache: 'yarn'
+          cache-dependency-path: 'tests/e2e/yarn.lock'
 
-    - name: E2E Tests Linting
-      run: make e2e-test-lint
+      - name: E2E Tests Linting
+        run: make e2e-test-lint
 
-    - name: E2E Tests
-      run: make e2e-test
+      - name: E2E Tests
+        run: make e2e-test-ci

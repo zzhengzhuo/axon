@@ -11,16 +11,17 @@ use overlord::{Consensus as Engine, Wal};
 use parking_lot::RwLock;
 use rlp::Encodable;
 
-// use common_apm::muta_apm;
 use common_apm::Instant;
+use common_apm_derive::trace_span;
 use common_crypto::BlsPublicKey;
 use common_logger::{json, log};
 use common_merkle::Merkle;
 use protocol::codec::ProtocolCodec;
 use protocol::traits::{ConsensusAdapter, Context, MessageTarget, NodeInfo};
 use protocol::types::{
-    Block, Bloom, BloomInput, Bytes, ExecResp, Hash, Hasher, Log, MerkleRoot, Metadata, Proof,
-    Proposal, Receipt, SignedTransaction, TransactionAction, ValidatorExtend, H160, U256,
+    Block, Bloom, BloomInput, Bytes, ExecResp, Hash, Hasher, Hex, Log, MerkleRoot, Metadata, Proof,
+    Proposal, Receipt, SignedTransaction, TransactionAction, ValidatorExtend, BASE_FEE_PER_GAS,
+    H160, MAX_BLOCK_GAS_LIMIT, U256,
 };
 use protocol::{
     async_trait, lazy::CURRENT_STATE_ROOT, tokio::sync::Mutex as AsyncMutex, ProtocolError,
@@ -57,10 +58,7 @@ pub struct ConsensusEngine<Adapter> {
 
 #[async_trait]
 impl<Adapter: ConsensusAdapter + 'static> Engine<Proposal> for ConsensusEngine<Adapter> {
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "consensus.engine",
-    //     logs = "{'next_number': 'next_number'}"
-    // )]
+    #[trace_span(kind = "consensus.engine", logs = "{next_number: next_number}")]
     async fn get_block(
         &self,
         ctx: Context,
@@ -72,7 +70,7 @@ impl<Adapter: ConsensusAdapter + 'static> Engine<Proposal> for ConsensusEngine<A
             .get_txs_from_mempool(
                 ctx.clone(),
                 next_number,
-                status.gas_limit,
+                MAX_BLOCK_GAS_LIMIT.into(),
                 status.tx_num_limit,
             )
             .await?;
@@ -88,10 +86,10 @@ impl<Adapter: ConsensusAdapter + 'static> Engine<Proposal> for ConsensusEngine<A
             signed_txs_hash:            digest_signed_transactions(&signed_txs),
             timestamp:                  time_now(),
             number:                     next_number,
-            gas_limit:                  100_000_000_000u64.into(),
+            gas_limit:                  MAX_BLOCK_GAS_LIMIT.into(),
             extra_data:                 Default::default(),
             mixed_hash:                 None,
-            base_fee_per_gas:           status.base_fee_per_gas,
+            base_fee_per_gas:           BASE_FEE_PER_GAS.into(),
             proof:                      status.proof,
             last_checkpoint_block_hash: status.last_checkpoint_block_hash,
             chain_id:                   self.node_info.chain_id,
@@ -113,12 +111,13 @@ impl<Adapter: ConsensusAdapter + 'static> Engine<Proposal> for ConsensusEngine<A
         Ok((proposal, Bytes::from(hash.as_bytes().to_vec())))
     }
 
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "consensus.engine",
-    //     logs = "{'next_number': 'next_number', 'hash':
-    // 'Hash::from_bytes(hash.clone()).unwrap().as_hex()', 'txs_len':
-    // 'block.inner.block.ordered_tx_hashes.len()'}"
-    // )]
+    #[trace_span(
+        kind = "consensus.engine",
+        logs = "{
+            next_number: next_number, 
+            hash: Hex::encode(hash.clone()).as_string(), 
+            txs_len: proposal.tx_hashes.len()}"
+    )]
     async fn check_block(
         &self,
         ctx: Context,
@@ -186,11 +185,12 @@ impl<Adapter: ConsensusAdapter + 'static> Engine<Proposal> for ConsensusEngine<A
     /// **TODO:** the overlord interface and process needs to be changed.
     /// Get the `FixedSignedTxs` from the argument rather than get it from
     /// mempool.
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "consensus.engine",
-    //     logs = "{'current_number': 'current_number', 'txs_len':
-    // 'commit.content.inner.block.ordered_tx_hashes.len()'}"
-    // )]
+    #[trace_span(
+        kind = "consensus.engine",
+        logs = "{
+            current_number: current_number, 
+            txs_len: commit.content.tx_hashes.len()}"
+    )]
     async fn commit(
         &self,
         ctx: Context,
@@ -272,7 +272,7 @@ impl<Adapter: ConsensusAdapter + 'static> Engine<Proposal> for ConsensusEngine<A
             .await?;
 
         self.adapter
-            .flush_mempool(ctx.clone(), &proposal.tx_hashes)
+            .flush_mempool(ctx.clone(), &proposal.tx_hashes, current_number)
             .await?;
 
         self.txs_wal.remove(current_number.saturating_sub(2))?;
@@ -300,7 +300,7 @@ impl<Adapter: ConsensusAdapter + 'static> Engine<Proposal> for ConsensusEngine<A
     }
 
     /// Only signed proposal and aggregated vote will be broadcast to others.
-    // #[muta_apm::derive::tracing_span(kind = "consensus.engine")]
+    #[trace_span(kind = "consensus.engine")]
     async fn broadcast_to_other(
         &self,
         ctx: Context,
@@ -332,10 +332,10 @@ impl<Adapter: ConsensusAdapter + 'static> Engine<Proposal> for ConsensusEngine<A
     }
 
     /// Only signed vote will be transmit to the relayer.
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "consensus.engine",
-    //     logs = "{'pub_key': 'hex::encode(pub_key.clone())'}"
-    // )]
+    #[trace_span(
+        kind = "consensus.engine",
+        logs = "{pub_key: Hex::encode(pub_key.clone()).as_string()}"
+    )]
     async fn transmit_to_relayer(
         &self,
         ctx: Context,
@@ -372,10 +372,7 @@ impl<Adapter: ConsensusAdapter + 'static> Engine<Proposal> for ConsensusEngine<A
 
     /// This function is rarely used, so get the authority list from the
     /// RocksDB.
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "consensus.engine",
-    //     logs = "{'next_number': 'next_number'}"
-    // )]
+    #[trace_span(kind = "consensus.engine", logs = "{next_number: next_number}")]
     async fn get_authority_list(
         &self,
         ctx: Context,
@@ -543,13 +540,10 @@ impl<Adapter: ConsensusAdapter + 'static> ConsensusEngine<Adapter> {
         self.check_order_transactions(ctx.clone(), proposal, &signed_txs)
     }
 
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "consensus.engine",
-    //     logs = "{'txs_len': 'signed_txs.len()'}"
-    // )]
+    #[trace_span(kind = "consensus.engine", logs = "{txs_len: signed_txs.len()}")]
     fn check_order_transactions(
         &self,
-        _ctx: Context,
+        ctx: Context,
         proposal: &Proposal,
         signed_txs: &[SignedTransaction],
     ) -> ProtocolResult<()> {
@@ -653,10 +647,8 @@ impl<Adapter: ConsensusAdapter + 'static> ConsensusEngine<Adapter> {
             prev_hash:                  block_hash,
             last_number:                block_number,
             last_state_root:            resp.state_root,
-            gas_limit:                  last_status.gas_limit,
             max_tx_size:                last_status.max_tx_size,
             tx_num_limit:               last_status.tx_num_limit,
-            base_fee_per_gas:           block.header.base_fee_per_gas,
             proof:                      proof.clone(),
             last_checkpoint_block_hash: last_status.last_checkpoint_block_hash,
         };
@@ -668,7 +660,7 @@ impl<Adapter: ConsensusAdapter + 'static> ConsensusEngine<Adapter> {
         self.adapter.set_args(
             ctx,
             resp.state_root,
-            last_status.gas_limit.as_u64(),
+            MAX_BLOCK_GAS_LIMIT,
             last_status.max_tx_size.as_u64(),
         );
 
@@ -758,22 +750,29 @@ pub fn generate_receipts_and_logs(
     txs: &[SignedTransaction],
     resp: &ExecResp,
 ) -> (Vec<Receipt>, Vec<Vec<Log>>) {
+    let mut log_index = 0;
     let receipts = txs
         .iter()
         .enumerate()
         .zip(resp.tx_resp.iter())
-        .map(|((idx, tx), res)| Receipt {
-            tx_hash: tx.transaction.hash,
-            block_number,
-            block_hash,
-            tx_index: idx as u32,
-            state_root,
-            used_gas: U256::from(res.gas_used),
-            logs_bloom: Bloom::from(BloomInput::Raw(rlp::encode_list(&res.logs).as_ref())),
-            logs: res.logs.clone(),
-            code_address: res.code_address,
-            sender: tx.sender,
-            ret: res.exit_reason.clone(),
+        .map(|((idx, tx), res)| {
+            let receipt = Receipt {
+                tx_hash: tx.transaction.hash,
+                block_number,
+                block_hash,
+                tx_index: idx as u32,
+                state_root,
+                used_gas: U256::from(res.gas_used),
+                logs_bloom: Bloom::from(BloomInput::Raw(rlp::encode_list(&res.logs).as_ref())),
+                logs: res.logs.clone(),
+                log_index,
+                code_address: res.code_address,
+                sender: tx.sender,
+                ret: res.exit_reason.clone(),
+                removed: res.removed,
+            };
+            log_index += res.logs.len() as u32;
+            receipt
         })
         .collect::<Vec<_>>();
     let logs = receipts.iter().map(|r| r.logs.clone()).collect::<Vec<_>>();

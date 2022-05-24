@@ -27,8 +27,22 @@ updates:
       timezone: Asia/Shanghai
 
   - package-ecosystem: "npm"
-    directory: "/"
+    directory: "/tests/e2e"
     schedule:
-      interval: daily
-      time: "03:00"
+      interval: weekly
+      day: wednesday
+      timezone: Asia/Shanghai
+  
+  - package-ecosystem: "npm"
+    directory: "/builtin-contract/crosschain"
+    schedule:
+      interval: weekly
+      day: wednesday
+      timezone: Asia/Shanghai
+
+  - package-ecosystem: "npm"
+    directory: "/builtin-contract/metadata"
+    schedule:
+      interval: weekly
+      day: wednesday
       timezone: Asia/Shanghai

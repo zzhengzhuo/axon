@@ -17,15 +17,26 @@ serde_json = "1.0"
 toml = "0.5"
 
 common-apm = { path = "../../common/apm" }
+common-apm-derive = { path = "../../common/apm-derive" }
 common-config-parser = { path = "../../common/config-parser" }
 common-crypto = { path = "../../common/crypto" }
 common-logger = { path = "../../common/logger" }
+common-memory-tracker = { path = "../../common/memory-tracker", optional = true }
 core-api = { path = "../../core/api" }
 core-consensus = { path = "../../core/consensus" }
 core-cross-client = { path = "../../core/cross-client" }
 core-executor = { path = "../../core/executor" }
+core-interoperation = { path = "../../core/interoperation" }
 core-mempool = { path = "../../core/mempool" }
 core-metadata = { path = "../../core/metadata" }
 core-network = { path = "../../core/network" }
+core-rpc-client = { path = "../../core/rpc-client" }
 core-storage = { path = "../../core/storage" }
 protocol = { path = "../../protocol", package = "axon-protocol" }
+
+[target.'cfg(all(not(target_env = "msvc"), not(target_os="macos")))'.dependencies]
+jemalloc-ctl = { version = "0.4", package = "tikv-jemalloc-ctl", optional = true }
+jemallocator = { version = "0.4", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms"], package = "tikv-jemallocator", optional = true }
+
+[features]
+jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl", "dep:common-memory-tracker"]

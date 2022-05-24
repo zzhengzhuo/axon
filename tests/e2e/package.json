@@ -2,21 +2,24 @@
   "name": "axon-e2e-tests",
   "scripts": {
     "test": "jest -i",
-    "lint": "eslint src/*.js"
+    "test-single": "jest",
+    "lint": "eslint src/*.js ./*.js"
   },
   "dependencies": {
     "@chainsafe/dappeteer": "^2.4.0",
-    "jest-environment-node": "^27.5.1",
-    "puppeteer": "^13.4.0"
+    "ethereumjs-tx": "^2.1.2",
+    "jest-environment-node": "^28.1.0",
+    "puppeteer": "^14.1.0",
+    "web3": "^1.7.3"
   },
   "devDependencies": {
-    "@babel/plugin-transform-modules-commonjs": "^7.16.8",
-    "eslint": "^8.10.0",
+    "@babel/plugin-transform-modules-commonjs": "^7.17.12",
+    "eslint": "^8.15.0",
     "eslint-config-airbnb": "^19.0.4",
-    "eslint-plugin-import": "^2.25.4",
-    "eslint-plugin-sonarjs": "^0.12.0",
+    "eslint-plugin-import": "^2.26.0",
+    "eslint-plugin-sonarjs": "^0.13.0",
     "http-server": "^14.1.0",
-    "jest": "^27.5.1",
+    "jest": "^28.1.0",
     "wait-on": "^6.0.1"
   },
   "jest": {

@@ -12,11 +12,11 @@ use common_crypto::{
     Crypto, PrivateKey, Secp256k1Recoverable, Secp256k1RecoverablePrivateKey,
     Secp256k1RecoverablePublicKey, Signature, ToPublicKey, UncompressedPublicKey,
 };
-use protocol::codec::ProtocolCodec;
+use core_executor::NATIVE_TOKEN_ISSUE_ADDRESS;
 use protocol::traits::{Context, MemPool, MemPoolAdapter};
 use protocol::types::{
-    public_to_address, recover_intact_pub_key, Bytes, Hash, Hasher, Public, SignedTransaction,
-    Transaction, TransactionAction, UnverifiedTransaction, H256, U256,
+    public_to_address, recover_intact_pub_key, Bytes, Hash, Public, SignedTransaction, Transaction,
+    TransactionAction, UnverifiedTransaction, H256, U256,
 };
 use protocol::{async_trait, tokio, ProtocolResult};
 
@@ -59,7 +59,12 @@ impl MemPoolAdapter for HashMemPoolAdapter {
         Ok(vec)
     }
 
-    async fn broadcast_tx(&self, _ctx: Context, tx: SignedTransaction) -> ProtocolResult<()> {
+    async fn broadcast_tx(
+        &self,
+        _ctx: Context,
+        _origin: Option<usize>,
+        tx: SignedTransaction,
+    ) -> ProtocolResult<()> {
         self.network_txs.insert(tx.transaction.hash, tx);
         Ok(())
     }
@@ -67,18 +72,14 @@ impl MemPoolAdapter for HashMemPoolAdapter {
     async fn check_authorization(
         &self,
         _ctx: Context,
-        tx: &SignedTransaction,
-    ) -> ProtocolResult<()> {
-        check_hash(tx)?;
-        check_sig(tx)
-    }
-
-    async fn check_transaction(
-        &self,
-        _ctx: Context,
         _tx: &SignedTransaction,
     ) -> ProtocolResult<()> {
         Ok(())
+    }
+
+    async fn check_transaction(&self, _ctx: Context, tx: &SignedTransaction) -> ProtocolResult<()> {
+        check_hash(tx)?;
+        check_sig(tx)
     }
 
     async fn check_storage_exist(&self, _ctx: Context, _tx_hash: &Hash) -> ProtocolResult<()> {
@@ -107,6 +108,16 @@ pub fn default_mock_txs(size: usize) -> Vec<SignedTransaction> {
     mock_txs(size, 0, TIMEOUT)
 }
 
+pub fn mock_sys_txs(size: usize) -> Vec<SignedTransaction> {
+    (0..size)
+        .map(|i| {
+            let priv_key = Secp256k1RecoverablePrivateKey::generate(&mut OsRng);
+            let pub_key = priv_key.pub_key();
+            mock_system_script_signed_tx(&priv_key, &pub_key, 0, i as u64, true)
+        })
+        .collect()
+}
+
 fn mock_txs(valid_size: usize, invalid_size: usize, timeout: u64) -> Vec<SignedTransaction> {
     (0..valid_size + invalid_size)
         .map(|i| {
@@ -133,17 +144,18 @@ async fn new_mempool(
     _max_tx_size: u64,
 ) -> MemPoolImpl<HashMemPoolAdapter> {
     let adapter = HashMemPoolAdapter::new();
-    let mempool = MemPoolImpl::new(pool_size, adapter, vec![]).await;
+    let mempool = MemPoolImpl::new(pool_size, 20, adapter, vec![]).await;
     mempool
 }
 
 fn check_hash(tx: &SignedTransaction) -> ProtocolResult<()> {
     assert!(tx.transaction.signature.is_some());
-    let b = tx.transaction.encode()?;
+    let tx_clone = tx.transaction.clone();
+    let calc_hash = tx_clone.calc_hash().hash;
 
-    if Hasher::digest(b) != tx.transaction.hash {
+    if calc_hash != tx.transaction.hash {
         return Err(MemPoolError::CheckHash {
-            expect: tx.transaction.hash,
+            expect: calc_hash,
             actual: tx.transaction.hash,
         }
         .into());
@@ -156,7 +168,7 @@ fn check_sig(stx: &SignedTransaction) -> ProtocolResult<()> {
         stx.transaction.signature_hash().as_bytes(),
         stx.transaction
             .signature
-            .clone()
+            .as_ref()
             .unwrap()
             .as_bytes()
             .as_ref(),
@@ -200,7 +212,7 @@ async fn concurrent_broadcast(
             tokio::spawn(async move {
                 mempool
                     .get_adapter()
-                    .broadcast_tx(Context::new(), tx)
+                    .broadcast_tx(Context::new(), None, tx)
                     .await
                     .unwrap()
             })
@@ -211,11 +223,16 @@ async fn concurrent_broadcast(
 }
 
 async fn exec_insert(signed_tx: SignedTransaction, mempool: Arc<MemPoolImpl<HashMemPoolAdapter>>) {
-    let _ = mempool.insert(Context::new(), signed_tx).await;
+    if let Err(e) = mempool.insert(Context::new(), signed_tx).await {
+        println!("{:?}", e);
+    }
 }
 
 async fn exec_flush(remove_hashes: Vec<Hash>, mempool: Arc<MemPoolImpl<HashMemPoolAdapter>>) {
-    mempool.flush(Context::new(), &remove_hashes).await.unwrap()
+    mempool
+        .flush(Context::new(), &remove_hashes, 0)
+        .await
+        .unwrap()
 }
 
 async fn exec_package(
@@ -239,16 +256,6 @@ async fn exec_ensure_order_txs(
         .unwrap();
 }
 
-async fn _exec_sync_propose_txs(
-    require_hashes: Vec<Hash>,
-    mempool: Arc<MemPoolImpl<HashMemPoolAdapter>>,
-) {
-    mempool
-        .sync_propose_txs(Context::new(), require_hashes)
-        .await
-        .unwrap();
-}
-
 async fn exec_get_full_txs(
     require_hashes: Vec<Hash>,
     mempool: Arc<MemPoolImpl<HashMemPoolAdapter>>,
@@ -259,13 +266,17 @@ async fn exec_get_full_txs(
         .unwrap()
 }
 
-fn mock_transaction(nonce: u64) -> Transaction {
+fn mock_transaction(nonce: u64, is_call_system_script: bool) -> Transaction {
     Transaction {
         nonce:                    nonce.into(),
         gas_limit:                U256::one(),
         max_priority_fee_per_gas: U256::one(),
         gas_price:                U256::one(),
-        action:                   TransactionAction::Create,
+        action:                   if is_call_system_script {
+            TransactionAction::Call(NATIVE_TOKEN_ISSUE_ADDRESS)
+        } else {
+            TransactionAction::Create
+        },
         value:                    U256::one(),
         data:                     random_bytes(32).to_vec().into(),
         access_list:              vec![],
@@ -279,7 +290,7 @@ fn mock_signed_tx(
     nonce: u64,
     valid: bool,
 ) -> SignedTransaction {
-    let raw = mock_transaction(nonce);
+    let raw = mock_transaction(nonce, false);
     let mut tx = UnverifiedTransaction {
         unsigned:  raw,
         signature: None,
@@ -300,7 +311,41 @@ fn mock_signed_tx(
     let pub_key = Public::from_slice(&pub_key.to_uncompressed_bytes()[1..65]);
 
     SignedTransaction {
-        transaction: tx.hash(),
+        transaction: tx.calc_hash(),
+        sender:      public_to_address(&pub_key),
+        public:      Some(pub_key),
+    }
+}
+
+fn mock_system_script_signed_tx(
+    priv_key: &Secp256k1RecoverablePrivateKey,
+    pub_key: &Secp256k1RecoverablePublicKey,
+    _timeout: u64,
+    nonce: u64,
+    valid: bool,
+) -> SignedTransaction {
+    let raw = mock_transaction(nonce, true);
+    let mut tx = UnverifiedTransaction {
+        unsigned:  raw,
+        signature: None,
+        chain_id:  random::<u64>(),
+        hash:      Default::default(),
+    };
+
+    let signature = if valid {
+        Secp256k1Recoverable::sign_message(tx.signature_hash().as_bytes(), &priv_key.to_bytes())
+            .unwrap()
+            .to_bytes()
+    } else {
+        Bytes::copy_from_slice([0u8; 65].as_ref())
+    };
+
+    tx.signature = Some(signature.into());
+
+    let pub_key = Public::from_slice(&pub_key.to_uncompressed_bytes()[1..65]);
+
+    SignedTransaction {
+        transaction: tx.calc_hash(),
         sender:      public_to_address(&pub_key),
         public:      Some(pub_key),
     }

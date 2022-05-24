@@ -5,9 +5,13 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use tentacle_multiaddr::MultiAddr;
 
-use core_consensus::{DEFAULT_OVERLORD_GAP, DEFAULT_SYNC_TXS_CHUNK_SIZE};
-use core_mempool::{DEFAULT_BROADCAST_TXS_INTERVAL, DEFAULT_BROADCAST_TXS_SIZE};
 use protocol::types::{Hex, H160, H256};
+
+pub const DEFAULT_BROADCAST_TXS_SIZE: usize = 200;
+pub const DEFAULT_BROADCAST_TXS_INTERVAL: u64 = 200; // milliseconds
+pub const DEFAULT_OVERLORD_GAP: usize = 5;
+pub const DEFAULT_SYNC_TXS_CHUNK_SIZE: usize = 5000;
+pub const DEFAULT_CACHE_SIZE: usize = 128 << 20;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ConfigApi {
@@ -97,14 +101,25 @@ pub struct ConfigExecutor {
     pub triedb_cache_size: usize,
 }
 
+fn default_cache_size() -> usize {
+    DEFAULT_CACHE_SIZE
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct ConfigRocksDB {
     pub max_open_files: i32,
+    #[serde(default = "default_cache_size")]
+    pub cache_size:     usize,
+    pub options_file:   Option<PathBuf>,
 }
 
 impl Default for ConfigRocksDB {
     fn default() -> Self {
-        Self { max_open_files: 64 }
+        Self {
+            max_open_files: 64,
+            cache_size:     default_cache_size(),
+            options_file:   None,
+        }
     }
 }
 
@@ -137,11 +152,15 @@ impl Default for ConfigLogger {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct ConfigAPM {
-    pub service_name:                 String,
-    pub tracing_address:              SocketAddr,
-    pub tracing_batch_size:           Option<usize>,
-    pub prometheus_listening_address: SocketAddr,
+pub struct ConfigJaeger {
+    pub service_name:       Option<String>,
+    pub tracing_address:    Option<SocketAddr>,
+    pub tracing_batch_size: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ConfigPrometheus {
+    pub listening_address: Option<SocketAddr>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -161,6 +180,36 @@ pub struct ConfigCrossClient {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct BlockchainConfig {
+    pub name:    String,
+    pub id:      u8,
+    pub tx_hash: H256,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ConfigInteroperabilityExtension {
+    pub blockchain_extension_transaction_hashes: Vec<BlockchainConfig>,
+}
+
+impl From<ConfigInteroperabilityExtension> for HashMap<u8, H256> {
+    fn from(ie: ConfigInteroperabilityExtension) -> Self {
+        ie.blockchain_extension_transaction_hashes
+            .into_iter()
+            .map(|v| (v.id, v.tx_hash))
+            .collect()
+    }
+}
+
+impl ConfigInteroperabilityExtension {
+    pub fn get_hashes(&self) -> Vec<H256> {
+        self.blockchain_extension_transaction_hashes
+            .iter()
+            .map(|v| v.tx_hash)
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     // crypto
     pub privkey:   Hex,
@@ -176,12 +225,13 @@ pub struct Config {
     pub logger:                      ConfigLogger,
     #[serde(default)]
     pub rocksdb:                     ConfigRocksDB,
-    pub apm:                         Option<ConfigAPM>,
+    pub jaeger:                      Option<ConfigJaeger>,
+    pub prometheus:                  Option<ConfigPrometheus>,
     pub cross_client:                ConfigCrossClient,
     pub epoch_len:                   u64,
-    pub asset_contract_address:      H256,
     pub metadata_contract_address:   H256,
     pub crosschain_contract_address: H256,
+    pub interoperability_extension:  ConfigInteroperabilityExtension,
 }
 
 impl Config {

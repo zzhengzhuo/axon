@@ -6,11 +6,13 @@ use overlord::{extract_voters, Crypto, OverlordHandler};
 use parking_lot::RwLock;
 
 use common_apm::Instant;
-use core_executor::{EVMExecutorAdapter, EvmExecutor};
+use common_apm_derive::trace_span;
+use core_executor::{AxonExecutor, AxonExecutorAdapter};
 use core_network::{PeerId, PeerIdExt};
 use protocol::traits::{
     CommonConsensusAdapter, ConsensusAdapter, Context, CrossClient, Executor, Gossip, MemPool,
-    MessageTarget, MetadataControl, PeerTrust, Priority, Rpc, Storage, SynchronizationAdapter,
+    MessageTarget, MetadataControl, Network, PeerTrust, Priority, Rpc, Storage,
+    SynchronizationAdapter,
 };
 use protocol::types::{
     BatchSignedTxs, Block, BlockNumber, Bytes, ExecResp, Hash, Hasher, Header, Hex, Log,
@@ -51,13 +53,13 @@ pub struct OverlordConsensusAdapter<
 impl<M, N, S, CS, MT, DB> ConsensusAdapter for OverlordConsensusAdapter<M, N, S, CS, MT, DB>
 where
     M: MemPool + 'static,
-    N: Rpc + PeerTrust + Gossip + 'static,
+    N: Network + Rpc + PeerTrust + Gossip + 'static,
     S: Storage + 'static,
     CS: CrossClient + 'static,
     MT: MetadataControl + 'static,
     DB: cita_trie::DB + 'static,
 {
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn get_txs_from_mempool(
         &self,
         ctx: Context,
@@ -68,13 +70,7 @@ where
         self.mempool.package(ctx, gas_limit, tx_num_limit).await
     }
 
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
-    async fn sync_txs(&self, ctx: Context, txs: Vec<Hash>) -> ProtocolResult<()> {
-        self.mempool.sync_propose_txs(ctx, txs).await
-    }
-
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter", logs =
-    // "{'txs_len': 'txs.len()'}")]
+    #[trace_span(kind = "consensus.adapter", logs = "{txs_len: txs.len()}")]
     async fn get_full_txs(
         &self,
         ctx: Context,
@@ -83,7 +79,7 @@ where
         self.mempool.get_full_txs(ctx, None, txs).await
     }
 
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn transmit(
         &self,
         ctx: Context,
@@ -109,13 +105,13 @@ where
     }
 
     /// Get the current number from storage.
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn get_current_number(&self, ctx: Context) -> ProtocolResult<u64> {
         let header = self.storage.get_latest_block_header(ctx).await?;
         Ok(header.number)
     }
 
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn pull_block(&self, ctx: Context, number: u64, end: &str) -> ProtocolResult<Block> {
         log::debug!("consensus: send rpc pull block {}", number);
         let res = self
@@ -125,8 +121,7 @@ where
         Ok(res)
     }
 
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter", logs =
-    // "{'txs_len': 'txs.len()'}")]
+    #[trace_span(kind = "consensus.adapter", logs = "{txs_len: txs.len()}")]
     async fn verify_txs(&self, ctx: Context, number: u64, txs: &[Hash]) -> ProtocolResult<()> {
         if let Err(e) = self
             .mempool
@@ -145,13 +140,13 @@ where
 impl<M, N, S, CS, MT, DB> SynchronizationAdapter for OverlordConsensusAdapter<M, N, S, CS, MT, DB>
 where
     M: MemPool + 'static,
-    N: Rpc + PeerTrust + Gossip + 'static,
+    N: Network + Rpc + PeerTrust + Gossip + 'static,
     S: Storage + 'static,
     CS: CrossClient + 'static,
     MT: MetadataControl + 'static,
     DB: cita_trie::DB + 'static,
 {
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     fn update_status(
         &self,
         ctx: Context,
@@ -184,7 +179,7 @@ where
     }
 
     /// Pull some blocks from other nodes from `begin` to `end`.
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn get_block_from_remote(&self, ctx: Context, number: u64) -> ProtocolResult<Block> {
         let res = self
             .network
@@ -210,10 +205,7 @@ where
 
     /// Pull signed transactions corresponding to the given hashes from other
     /// nodes.
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "consensus.adapter",
-    //     logs = "{'txs_len': 'hashes.len()'}"
-    // )]
+    #[trace_span(kind = "consensus.adapter", logs = "{txs_len: hashes.len()}")]
     async fn get_txs_from_remote(
         &self,
         ctx: Context,
@@ -233,7 +225,7 @@ where
     }
 
     /// Pull a proof of certain block from other nodes
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn get_proof_from_remote(&self, ctx: Context, number: u64) -> ProtocolResult<Proof> {
         let ret = self
             .network
@@ -247,31 +239,25 @@ where
 impl<M, N, S, CS, MT, DB> CommonConsensusAdapter for OverlordConsensusAdapter<M, N, S, CS, MT, DB>
 where
     M: MemPool + 'static,
-    N: Rpc + PeerTrust + Gossip + 'static,
+    N: Network + Rpc + PeerTrust + Gossip + 'static,
     S: Storage + 'static,
     CS: CrossClient + 'static,
     MT: MetadataControl + 'static,
     DB: cita_trie::DB + 'static,
 {
     /// Save a block to the database.
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "consensus.adapter",
-    //     logs = "{'txs_len': 'block.ordered_tx_hashes.len()'}"
-    // )]
+    #[trace_span(kind = "consensus.adapter", logs = "{txs_len: block.tx_hashes.len()}")]
     async fn save_block(&self, ctx: Context, block: Block) -> ProtocolResult<()> {
         self.storage.insert_block(ctx, block).await
     }
 
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn save_proof(&self, ctx: Context, proof: Proof) -> ProtocolResult<()> {
         self.storage.update_latest_proof(ctx, proof).await
     }
 
     /// Save some signed transactions to the database.
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "consensus.adapter",
-    //     logs = "{'txs_len': 'signed_txs.len()'}"
-    // )]
+    #[trace_span(kind = "consensus.adapter", logs = "{txs_len: signed_txs.len()}")]
     async fn save_signed_txs(
         &self,
         ctx: Context,
@@ -283,10 +269,7 @@ where
             .await
     }
 
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "consensus.adapter",
-    //     logs = "{'receipts_len': 'receipts.len()'}"
-    // )]
+    #[trace_span(kind = "consensus.adapter", logs = "{receipts_len: receipts.len()}")]
     async fn save_receipts(
         &self,
         ctx: Context,
@@ -297,16 +280,23 @@ where
     }
 
     /// Flush the given transactions in the mempool.
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "consensus.adapter",
-    //     logs = "{'flush_txs_len': 'ordered_tx_hashes.len()'}"
-    // )]
-    async fn flush_mempool(&self, ctx: Context, ordered_tx_hashes: &[Hash]) -> ProtocolResult<()> {
-        self.mempool.flush(ctx, ordered_tx_hashes).await
+    #[trace_span(
+        kind = "consensus.adapter",
+        logs = "{flush_txs_len: ordered_tx_hashes.len()}"
+    )]
+    async fn flush_mempool(
+        &self,
+        ctx: Context,
+        ordered_tx_hashes: &[Hash],
+        current_number: BlockNumber,
+    ) -> ProtocolResult<()> {
+        self.mempool
+            .flush(ctx, ordered_tx_hashes, current_number)
+            .await
     }
 
     /// Get a block corresponding to the given number.
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn get_block_by_number(&self, ctx: Context, number: u64) -> ProtocolResult<Block> {
         self.storage
             .get_block(ctx, number)
@@ -326,16 +316,13 @@ where
     }
 
     /// Get the current number from storage.
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn get_current_number(&self, ctx: Context) -> ProtocolResult<u64> {
         let header = self.storage.get_latest_block_header(ctx).await?;
         Ok(header.number)
     }
 
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "consensus.adapter",
-    //     logs = "{'txs_len': 'tx_hashes.len()'}"
-    // )]
+    #[trace_span(kind = "consensus.adapter", logs = "{txs_len: tx_hashes.len()}")]
     async fn get_txs_from_storage(
         &self,
         ctx: Context,
@@ -351,15 +338,15 @@ where
     }
 
     #[allow(unused_braces)]
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn exec(
         &self,
-        _ctx: Context,
+        ctx: Context,
         last_state_root: Hash,
         proposal: &Proposal,
         signed_txs: Vec<SignedTransaction>,
     ) -> ProtocolResult<ExecResp> {
-        let mut backend = EVMExecutorAdapter::from_root(
+        let mut backend = AxonExecutorAdapter::from_root(
             last_state_root,
             Arc::clone(&self.trie_db),
             Arc::clone(&self.storage),
@@ -368,7 +355,7 @@ where
 
         Ok(task::block_in_place(|| {
             let time = Instant::now();
-            let res = EvmExecutor::default().exec(&mut backend, signed_txs);
+            let res = AxonExecutor::default().exec(&mut backend, signed_txs);
             common_apm::metrics::consensus::CONSENSUS_TIME_HISTOGRAM_VEC_STATIC
                 .exec
                 .observe(common_apm::metrics::duration_to_sec(time.elapsed()));
@@ -393,7 +380,7 @@ where
         self.metadata.update_metadata(ctx, header)
     }
 
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn broadcast_number(&self, ctx: Context, number: u64) -> ProtocolResult<()> {
         self.network
             .broadcast(ctx.clone(), BROADCAST_HEIGHT, number, Priority::High)
@@ -405,18 +392,17 @@ where
             .set_args(context, state_root, gas_limit, max_tx_size);
     }
 
-    fn tag_consensus(&self, _ctx: Context, _pub_keys: Vec<Bytes>) -> ProtocolResult<()> {
-        // let _peer_ids_bytes = pub_keys
-        //     .iter()
-        //     .map(|pk| PeerId::from_pubkey_bytes(pk).map(PeerIdExt::into_bytes_ext))
-        //     .collect::<Result<_, _>>()?;
+    fn tag_consensus(&self, ctx: Context, pub_keys: Vec<Bytes>) -> ProtocolResult<()> {
+        let peer_ids_bytes = pub_keys
+            .iter()
+            .map(|pk| PeerId::from_pubkey_bytes(pk).map(PeerIdExt::into_bytes_ext))
+            .collect::<Result<_, _>>()?;
 
-        // self.network.tag_consensus(ctx, peer_ids_bytes)
-        Ok(())
+        self.network.tag_consensus(ctx, peer_ids_bytes)
     }
 
     /// this function verify all info in header except proof and roots
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn verify_block_header(&self, ctx: Context, proposal: &Proposal) -> ProtocolResult<()> {
         let previous_block_header = self
             .get_block_header_by_number(ctx.clone(), proposal.number - 1)
@@ -445,7 +431,7 @@ where
         Ok(())
     }
 
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     async fn verify_proof(&self, ctx: Context, block: Block, proof: Proof) -> ProtocolResult<()> {
         // the block 0 has no proof, which is consensus-ed by community, not by chain
         if block.header.number == 0 {
@@ -570,10 +556,10 @@ where
         self.cross_client.set_checkpoint(ctx, block, proof).await
     }
 
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     fn verify_proof_signature(
         &self,
-        _ctx: Context,
+        ctx: Context,
         block_number: u64,
         vote_hash: Bytes,
         aggregated_signature_bytes: Bytes,
@@ -592,10 +578,10 @@ where
             })
     }
 
-    // #[muta_apm::derive::tracing_span(kind = "consensus.adapter")]
+    #[trace_span(kind = "consensus.adapter")]
     fn verify_proof_weight(
         &self,
-        _ctx: Context,
+        ctx: Context,
         block_number: u64,
         weight_map: HashMap<Bytes, u32>,
         signed_voters: Vec<Bytes>,

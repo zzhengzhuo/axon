@@ -1,15 +1,17 @@
+mod system_script;
+
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use evm::backend::{MemoryAccount, MemoryBackend, MemoryVicinity};
 
 use protocol::types::{
-    ExitReason, ExitSucceed, Public, SignatureComponents, SignedTransaction, Transaction,
+    Bytes, ExitReason, ExitSucceed, Public, SignatureComponents, SignedTransaction, Transaction,
     TransactionAction, UnverifiedTransaction, H160, H256, U256,
 };
 use protocol::{codec::hex_decode, traits::Executor};
 
-use crate::EvmExecutor;
+use crate::{AxonExecutor, EvmExecutor};
 
 fn gen_vicinity() -> MemoryVicinity {
     MemoryVicinity {
@@ -26,7 +28,7 @@ fn gen_vicinity() -> MemoryVicinity {
     }
 }
 
-fn gen_tx(sender: H160, addr: H160, data: Vec<u8>) -> SignedTransaction {
+fn gen_tx(sender: H160, addr: H160, value: u64, data: Vec<u8>) -> SignedTransaction {
     SignedTransaction {
         transaction: UnverifiedTransaction {
             unsigned:  Transaction {
@@ -35,14 +37,14 @@ fn gen_tx(sender: H160, addr: H160, data: Vec<u8>) -> SignedTransaction {
                 gas_price:                U256::default(),
                 gas_limit:                U256::from_str("0x1000000000").unwrap(),
                 action:                   TransactionAction::Call(addr),
-                value:                    U256::default(),
+                value:                    value.into(),
                 data:                     data.into(),
                 access_list:              Vec::new(),
             },
             signature: Some(SignatureComponents {
                 standard_v: 0,
-                r:          H256::default(),
-                s:          H256::default(),
+                r:          Bytes::default(),
+                s:          Bytes::default(),
             }),
             chain_id:  0u64,
             hash:      H256::default(),
@@ -80,6 +82,7 @@ fn test_ackermann31() {
     let tx = gen_tx(
         H160::from_str("0xf000000000000000000000000000000000000000").unwrap(),
         H160::from_str("0x1000000000000000000000000000000000000000").unwrap(),
+        0,
         hex_decode("2839e92800000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000001").unwrap()
     );
     let r = executor.inner_exec(&mut backend, tx);
@@ -127,6 +130,7 @@ fn test_simplestorage() {
     let mut tx = gen_tx(
         H160::from_str("0xf000000000000000000000000000000000000000").unwrap(),
         H160::from_str("0x1000000000000000000000000000000000000000").unwrap(),
+        0,
         hex_decode(simplestorage_create_code).unwrap(),
     );
     tx.transaction.unsigned.action = TransactionAction::Create;
@@ -143,6 +147,7 @@ fn test_simplestorage() {
     let tx = gen_tx(
         H160::from_str("0xf000000000000000000000000000000000000000").unwrap(),
         H160::from_str("0xc15d2ba57d126e6603240e89437efd419ce329d2").unwrap(),
+        0,
         hex_decode("60fe47b1000000000000000000000000000000000000000000000000000000000000002a")
             .unwrap(),
     );
@@ -155,6 +160,7 @@ fn test_simplestorage() {
     let tx = gen_tx(
         H160::from_str("0xf000000000000000000000000000000000000000").unwrap(),
         H160::from_str("0xc15d2ba57d126e6603240e89437efd419ce329d2").unwrap(),
+        0,
         hex_decode("6d4ce63c").unwrap(),
     );
     let r = executor.inner_exec(&mut backend, tx);
@@ -166,9 +172,11 @@ fn test_simplestorage() {
     assert_eq!(r.remain_gas, 18446744073709528227);
 
     // let's call SimpleStorage.get() by call
+    let executor = AxonExecutor::default();
     let r = executor.call(
         &mut backend,
-        H160::from_str("0xc15d2ba57d126e6603240e89437efd419ce329d2").unwrap(),
+        None,
+        Some(H160::from_str("0xc15d2ba57d126e6603240e89437efd419ce329d2").unwrap()),
         hex_decode("6d4ce63c").unwrap(),
     );
     assert_eq!(r.exit_reason, ExitReason::Succeed(ExitSucceed::Returned));

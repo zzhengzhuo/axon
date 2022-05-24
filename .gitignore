@@ -24,6 +24,7 @@ devtools/chain/data
 
 tests/e2e/node_modules
 tests/e2e/yarn-error.log
+tests/e2e/src/test_data_temp_file/testData_*.json
 
 # rocksdb
 **/rocksdb/
@@ -33,9 +34,5 @@ logs/
 free-space
 
 byzantine/tests/node_modules
-core/executor/*
-devtools/devtools/chain/data/*
-devtools/chain/data1/*
-devtools/chain/data2/*
-devtools/chain/data3/*
-devtools/chain/data4/*
+
+*.out

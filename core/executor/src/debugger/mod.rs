@@ -15,8 +15,8 @@ use protocol::types::{
     UnverifiedTransaction, H160, H256, NIL_DATA, RLP_NULL, U256,
 };
 
-use crate::adapter::{EVMExecutorAdapter, MPTTrie};
-use crate::{EvmExecutor, RocksTrieDB};
+use crate::adapter::{AxonExecutorAdapter, MPTTrie};
+use crate::{AxonExecutor, RocksTrieDB};
 
 pub struct EvmDebugger {
     state_root: H256,
@@ -28,10 +28,10 @@ impl EvmDebugger {
     pub fn new(distribute_address: H160, distribute_amount: U256, db_path: &str) -> Self {
         let mut db_data_path = db_path.to_string();
         db_data_path.push_str("/data");
-        let rocks_adapter = Arc::new(RocksAdapter::new(db_data_path, 1024).unwrap());
+        let rocks_adapter = Arc::new(RocksAdapter::new(db_data_path, Default::default()).unwrap());
         let mut db_state_path = db_path.to_string();
         db_state_path.push_str("/state");
-        let trie = Arc::new(RocksTrieDB::new(db_state_path, 1024, 1000).unwrap());
+        let trie = Arc::new(RocksTrieDB::new(db_state_path, Default::default(), 1000).unwrap());
 
         let mut mpt = MPTTrie::new(Arc::clone(&trie));
 
@@ -57,13 +57,13 @@ impl EvmDebugger {
 
     pub fn exec(&mut self, number: u64, txs: Vec<SignedTransaction>) -> ExecResp {
         let mut backend = self.backend(number);
-        let evm = EvmExecutor::default();
+        let evm = AxonExecutor::default();
         let res = evm.exec(&mut backend, txs);
         self.state_root = res.state_root;
         res
     }
 
-    fn backend(&self, number: u64) -> EVMExecutorAdapter<ImplStorage<RocksAdapter>, RocksTrieDB> {
+    fn backend(&self, number: u64) -> AxonExecutorAdapter<ImplStorage<RocksAdapter>, RocksTrieDB> {
         let exec_ctx = ExecutorContext {
             block_number:           number.into(),
             block_hash:             rand_hash(),
@@ -78,7 +78,7 @@ impl EvmDebugger {
             logs:                   vec![],
         };
 
-        EVMExecutorAdapter::from_root(
+        AxonExecutorAdapter::from_root(
             self.state_root,
             Arc::clone(&self.trie_db),
             Arc::clone(&self.storage),

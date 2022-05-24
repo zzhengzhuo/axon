@@ -13,7 +13,6 @@ pub use adapter::message::{
     RPC_PULL_TXS, RPC_RESP_PULL_TXS, RPC_RESP_PULL_TXS_SYNC,
 };
 pub use adapter::DefaultMemPoolAdapter;
-pub use adapter::{DEFAULT_BROADCAST_TXS_INTERVAL, DEFAULT_BROADCAST_TXS_SIZE};
 
 use std::collections::HashSet;
 use std::error::Error;
@@ -22,15 +21,17 @@ use std::sync::Arc;
 use futures::future::try_join_all;
 
 use common_apm::Instant;
+use core_executor::is_call_system_script;
+use core_network::NetworkContext;
 use protocol::traits::{Context, MemPool, MemPoolAdapter};
-use protocol::types::{Hash, SignedTransaction, H256, U256};
+use protocol::types::{BlockNumber, Hash, SignedTransaction, H160, H256, U256};
 use protocol::{async_trait, tokio, Display, ProtocolError, ProtocolErrorKind, ProtocolResult};
 
 use crate::context::TxContext;
-use crate::pool::PirorityPool;
+use crate::pool::PriorityPool;
 
 pub struct MemPoolImpl<Adapter> {
-    pool:    PirorityPool,
+    pool:    PriorityPool,
     adapter: Arc<Adapter>,
 }
 
@@ -40,11 +41,12 @@ where
 {
     pub async fn new(
         pool_size: usize,
+        timeout_gap: u64,
         adapter: Adapter,
         initial_txs: Vec<SignedTransaction>,
     ) -> Self {
         let mempool = MemPoolImpl {
-            pool:    PirorityPool::new(pool_size).await,
+            pool:    PriorityPool::new(pool_size, timeout_gap).await,
             adapter: Arc::new(adapter),
         };
 
@@ -90,27 +92,44 @@ where
         self.adapter
             .check_storage_exist(ctx.clone(), &stx.transaction.hash)
             .await?;
-        self.pool.insert(stx)
+        self.pool.insert(stx, true)
     }
 
-    async fn insert_tx(&self, ctx: Context, tx: SignedTransaction) -> ProtocolResult<()> {
+    async fn insert_tx(
+        &self,
+        ctx: Context,
+        tx: SignedTransaction,
+        is_system_script: bool,
+    ) -> ProtocolResult<()> {
         let tx_hash = &tx.transaction.hash;
-        if self.pool.reach_limit() {
-            return Err(MemPoolError::ReachLimit(self.pool.pool_size()).into());
+        if let Err(i) = self.pool.reach_limit() {
+            return Err(MemPoolError::ReachLimit(i).into());
         }
 
-        self.adapter.check_authorization(ctx.clone(), &tx).await?;
-        self.adapter.check_transaction(ctx.clone(), &tx).await?;
-        self.adapter
-            .check_storage_exist(ctx.clone(), tx_hash)
-            .await?;
-
-        self.pool.insert(tx.clone())?;
-
-        if !ctx.is_network_origin_txs() {
-            self.adapter.broadcast_tx(ctx, tx).await?;
+        if self.pool.contains(tx_hash) {
+            return Ok(());
         } else {
-            self.adapter.report_good(ctx);
+            self.adapter.check_authorization(ctx.clone(), &tx).await?;
+            self.adapter.check_transaction(ctx.clone(), &tx).await?;
+            self.adapter
+                .check_storage_exist(ctx.clone(), tx_hash)
+                .await?;
+
+            if is_system_script {
+                self.pool.insert_system_script_tx(tx.clone())?;
+            } else {
+                self.pool.insert(tx.clone(), true)?;
+            }
+
+            if !ctx.is_network_origin_txs() {
+                self.adapter.broadcast_tx(ctx, None, tx).await?;
+            } else {
+                let origin = ctx.session_id().unwrap();
+                self.adapter
+                    .broadcast_tx(ctx.clone(), Some(origin.value()), tx)
+                    .await?;
+                self.adapter.report_good(ctx);
+            }
         }
 
         Ok(())
@@ -154,7 +173,7 @@ where
     }
 
     #[cfg(test)]
-    pub fn get_tx_cache(&self) -> &PirorityPool {
+    pub fn get_tx_cache(&self) -> &PriorityPool {
         &self.pool
     }
 }
@@ -165,7 +184,8 @@ where
     Adapter: MemPoolAdapter + 'static,
 {
     async fn insert(&self, ctx: Context, tx: SignedTransaction) -> ProtocolResult<()> {
-        self.insert_tx(ctx, tx).await
+        let is_call_system_script = is_call_system_script(&tx.transaction.unsigned.action);
+        self.insert_tx(ctx, tx, is_call_system_script).await
     }
 
     async fn package(
@@ -190,19 +210,24 @@ where
         Ok(txs)
     }
 
-    async fn flush(&self, _ctx: Context, tx_hashes: &[Hash]) -> ProtocolResult<()> {
+    async fn flush(
+        &self,
+        _ctx: Context,
+        tx_hashes: &[Hash],
+        current_number: BlockNumber,
+    ) -> ProtocolResult<()> {
         log::info!(
             "[core_mempool]: flush mempool with {:?} tx_hashes",
             tx_hashes.len(),
         );
+        let rt = tokio::runtime::Handle::current();
         let nonce_check = |tx: &SignedTransaction| -> bool {
-            let rt = tokio::runtime::Handle::current();
             tokio::task::block_in_place(|| {
                 rt.block_on(self.adapter.check_authorization(Context::new(), tx))
                     .is_ok()
             })
         };
-        self.pool.flush(tx_hashes, nonce_check);
+        self.pool.flush(tx_hashes, nonce_check, current_number);
         Ok(())
     }
 
@@ -276,8 +301,14 @@ where
 
             self.verify_tx_in_parallel(ctx.clone(), txs.clone()).await?;
 
-            for signed_tx in txs.into_iter() {
-                self.pool.insert(signed_tx)?;
+            for signed_tx in txs {
+                let is_call_system_script =
+                    is_call_system_script(&signed_tx.transaction.unsigned.action);
+                if is_call_system_script {
+                    self.pool.insert_system_script_tx(signed_tx)?;
+                } else {
+                    self.pool.insert(signed_tx, false)?;
+                }
             }
 
             self.adapter.report_good(ctx);
@@ -286,12 +317,8 @@ where
         Ok(())
     }
 
-    async fn sync_propose_txs(
-        &self,
-        _ctx: Context,
-        _propose_tx_hashes: Vec<Hash>,
-    ) -> ProtocolResult<()> {
-        Ok(())
+    async fn get_tx_count_by_address(&self, _ctx: Context, address: H160) -> ProtocolResult<usize> {
+        Ok(self.pool.get_tx_count_by_address(address))
     }
 
     fn set_args(&self, context: Context, state_root: H256, gas_limit: u64, max_tx_size: u64) {

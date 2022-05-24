@@ -1,3 +1,4 @@
+mod filter;
 mod r#impl;
 mod web3_types;
 mod ws_subscription;
@@ -14,13 +15,13 @@ use protocol::types::{Hash, Hex, H160, H256, U256};
 use protocol::ProtocolResult;
 
 use crate::jsonrpc::{
+    filter::AxonFilterServer,
     web3_types::{
-        BlockId, Web3Block, Web3CallRequest, Web3FeeHistory, Web3Filter, Web3Log, Web3Receipt,
-        Web3SyncStatus, Web3Transaction,
+        BlockId, BlockIdWithPending, Web3Block, Web3CallRequest, Web3FeeHistory, Web3Filter,
+        Web3Log, Web3Receipt, Web3SyncStatus, Web3Transaction,
     },
     ws_subscription::{ws_subscription_module, HexIdProvider},
 };
-
 use crate::APIError;
 
 type RpcResult<T> = Result<T, Error>;
@@ -54,7 +55,11 @@ pub trait AxonJsonRpc {
     async fn block_number(&self) -> RpcResult<U256>;
 
     #[method(name = "eth_getTransactionCount")]
-    async fn get_transaction_count(&self, address: H160, number: BlockId) -> RpcResult<U256>;
+    async fn get_transaction_count(
+        &self,
+        address: H160,
+        number: BlockIdWithPending,
+    ) -> RpcResult<U256>;
 
     #[method(name = "eth_getBlockTransactionCountByNumber")]
     async fn get_transaction_count_by_number(&self, number: BlockId) -> RpcResult<U256>;
@@ -162,22 +167,25 @@ pub async fn run_jsonrpc_server<Adapter: APIAdapter + 'static>(
 ) -> ProtocolResult<(Option<HttpServerHandle>, Option<WsServerHandle>)> {
     let mut ret = (None, None);
 
+    let filter = filter::filter_module(Arc::clone(&adapter)).into_rpc();
+    let mut rpc = r#impl::JsonRpcImpl::new(
+        Arc::clone(&adapter),
+        &config.rpc.client_version,
+        config.data_path.clone(),
+    )
+    .into_rpc();
+    rpc.merge(filter).unwrap();
+
     if let Some(addr) = config.rpc.http_listening_address {
         let server = HttpServerBuilder::new()
             .max_request_body_size(config.rpc.max_payload_size as u32)
             .build(addr)
+            .await
             .map_err(|e| APIError::HttpServer(e.to_string()))?;
 
         ret.0 = Some(
             server
-                .start(
-                    r#impl::JsonRpcImpl::new(
-                        Arc::clone(&adapter),
-                        &config.rpc.client_version,
-                        config.data_path.clone(),
-                    )
-                    .into_rpc(),
-                )
+                .start(rpc.clone())
                 .map_err(|e| APIError::HttpServer(e.to_string()))?,
         );
     }
@@ -191,12 +199,6 @@ pub async fn run_jsonrpc_server<Adapter: APIAdapter + 'static>(
             .await
             .map_err(|e| APIError::WebSocketServer(e.to_string()))?;
 
-        let mut rpc = r#impl::JsonRpcImpl::new(
-            Arc::clone(&adapter),
-            &config.rpc.client_version,
-            config.data_path,
-        )
-        .into_rpc();
         rpc.merge(ws_subscription_module(adapter).await).unwrap();
 
         ret.1 = Some(

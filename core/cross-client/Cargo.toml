@@ -6,16 +6,16 @@ edition = "2021"
 
 [dependencies]
 cita_trie = "3.0"
-ckb-hash = "0.101"
-ckb-jsonrpc-types = "0.101"
-ckb-types = "0.101.3"
-ethabi = "16.0"
-ethabi-contract = "16.0"
-ethabi-derive = "16.0"
+ckb-hash = "0.103"
+ckb-jsonrpc-types = "0.103"
+ckb-types = "0.103.0"
+ethabi = "17.0"
+ethabi-contract = { git = "https://github.com/rust-ethereum/ethabi.git", rev = "7edf185" }
+ethabi-derive = { git = "https://github.com/rust-ethereum/ethabi.git", rev = "7edf185" }
 futures = "0.3"
 jsonrpc-core = "18.0"
 log = "0.4"
-reqwest = { version = "0.11.10", features = ["json"] }
+reqwest = { version = "0.11", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio-util = { version = "0.7", features = ["codec"] }

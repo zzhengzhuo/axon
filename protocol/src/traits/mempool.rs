@@ -1,8 +1,5 @@
-use async_trait::async_trait;
-use creep::Context;
-
-use crate::types::{Hash, MerkleRoot, SignedTransaction, U256};
-use crate::ProtocolResult;
+use crate::types::{BlockNumber, Hash, MerkleRoot, SignedTransaction, H160, U256};
+use crate::{async_trait, traits::Context, ProtocolResult};
 
 #[async_trait]
 pub trait MemPool: Send + Sync {
@@ -15,7 +12,12 @@ pub trait MemPool: Send + Sync {
         tx_num_limit: u64,
     ) -> ProtocolResult<Vec<Hash>>;
 
-    async fn flush(&self, ctx: Context, tx_hashes: &[Hash]) -> ProtocolResult<()>;
+    async fn flush(
+        &self,
+        ctx: Context,
+        tx_hashes: &[Hash],
+        current_number: BlockNumber,
+    ) -> ProtocolResult<()>;
 
     async fn get_full_txs(
         &self,
@@ -31,11 +33,7 @@ pub trait MemPool: Send + Sync {
         order_tx_hashes: &[Hash],
     ) -> ProtocolResult<()>;
 
-    async fn sync_propose_txs(
-        &self,
-        ctx: Context,
-        propose_tx_hashes: Vec<Hash>,
-    ) -> ProtocolResult<()>;
+    async fn get_tx_count_by_address(&self, ctx: Context, address: H160) -> ProtocolResult<usize>;
 
     fn set_args(&self, context: Context, state_root: MerkleRoot, gas_limit: u64, max_tx_size: u64);
 }
@@ -49,7 +47,12 @@ pub trait MemPoolAdapter: Send + Sync {
         tx_hashes: Vec<Hash>,
     ) -> ProtocolResult<Vec<SignedTransaction>>;
 
-    async fn broadcast_tx(&self, ctx: Context, tx: SignedTransaction) -> ProtocolResult<()>;
+    async fn broadcast_tx(
+        &self,
+        ctx: Context,
+        origin: Option<usize>,
+        tx: SignedTransaction,
+    ) -> ProtocolResult<()>;
 
     async fn check_authorization(&self, ctx: Context, tx: &SignedTransaction)
         -> ProtocolResult<()>;

@@ -34,9 +34,6 @@ check:
 build:
 	${CARGO} build ${VERBOSE} --release
 
-prod-muta-chain:
-	${CARGO} build ${VERBOSE} --release --example muta-chain
-
 check-fmt:
 	cargo +nightly fmt ${VERBOSE} --all -- --check
 
@@ -70,6 +67,16 @@ e2e-test:
 	cd tests/e2e && yarn
 	cd tests/e2e/src && yarn exec http-server &
 	cd tests/e2e && yarn exec wait-on -t 5000 tcp:8000 && yarn exec wait-on -t 5000 tcp:8080 && yarn test
+	pkill -2 axon
+	pkill -2 http-server
+
+e2e-test-ci:
+	cargo build
+	rm -rf ./devtools/chain/data
+	./target/debug/axon --config devtools/chain/config.toml --genesis devtools/chain/genesis_single_node.json > /tmp/log 2>&1 &
+	cd tests/e2e && yarn
+	cd tests/e2e/src && yarn exec http-server &
+	cd tests/e2e && yarn exec wait-on -t 5000 tcp:8000 && yarn exec wait-on -t 5000 tcp:8080 && HEADLESS=true yarn test
 	pkill -2 axon
 	pkill -2 http-server
 

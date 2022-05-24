@@ -1,14 +1,10 @@
 use std::collections::HashMap;
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use creep::Context;
-
 use crate::types::{
-    Address, Block, BlockNumber, ExecResp, Hash, Header, Hex, Log, MerkleRoot, Metadata, Proof,
-    Proposal, Receipt, SignedTransaction, Validator, U256,
+    Address, Block, BlockNumber, Bytes, ExecResp, Hash, Header, Hex, Log, MerkleRoot, Metadata,
+    Proof, Proposal, Receipt, SignedTransaction, Validator, U256,
 };
-use crate::ProtocolResult;
+use crate::{async_trait, traits::Context, ProtocolResult};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MessageTarget {
@@ -103,7 +99,12 @@ pub trait CommonConsensusAdapter: Send + Sync {
     ) -> ProtocolResult<()>;
 
     /// Flush the given transactions in the mempool.
-    async fn flush_mempool(&self, ctx: Context, ordered_tx_hashes: &[Hash]) -> ProtocolResult<()>;
+    async fn flush_mempool(
+        &self,
+        ctx: Context,
+        ordered_tx_hashes: &[Hash],
+        current_number: BlockNumber,
+    ) -> ProtocolResult<()>;
 
     /// Get a block corresponding to the given height.
     async fn get_block_by_number(&self, ctx: Context, height: u64) -> ProtocolResult<Block>;
@@ -187,9 +188,6 @@ pub trait ConsensusAdapter: CommonConsensusAdapter + Send + Sync {
         gas_limit: U256,
         tx_num_limit: u64,
     ) -> ProtocolResult<Vec<Hash>>;
-
-    /// Synchronous signed transactions.
-    async fn sync_txs(&self, ctx: Context, propose_txs: Vec<Hash>) -> ProtocolResult<()>;
 
     /// Get the signed transactions corresponding to the given hashes.
     async fn get_full_txs(

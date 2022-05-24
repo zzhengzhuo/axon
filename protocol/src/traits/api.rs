@@ -1,11 +1,8 @@
-use crate::traits::Context;
 use crate::types::{
     Account, Block, BlockNumber, Bytes, Hash, Header, Proposal, Receipt, SignedTransaction, TxResp,
-    H160,
+    H160, U256,
 };
-use crate::ProtocolResult;
-use async_trait::async_trait;
-use ethereum_types::U256;
+use crate::{async_trait, traits::Context, ProtocolResult};
 
 #[async_trait]
 pub trait APIAdapter: Send + Sync {
@@ -62,10 +59,13 @@ pub trait APIAdapter: Send + Sync {
         number: Option<BlockNumber>,
     ) -> ProtocolResult<Account>;
 
+    async fn get_pending_tx_count(&self, ctx: Context, address: H160) -> ProtocolResult<U256>;
+
     async fn evm_call(
         &self,
         ctx: Context,
-        address: H160,
+        from: Option<H160>,
+        to: Option<H160>,
         data: Vec<u8>,
         state_root: Hash,
         proposal: Proposal,

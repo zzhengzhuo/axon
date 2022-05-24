@@ -24,8 +24,8 @@ impl TxWrapper {
         self.0.hash
     }
 
-    pub fn into_signed_transaction(self) -> SignedTransaction {
-        self.1
+    pub fn into_parts(self) -> (TxPtr, SignedTransaction) {
+        (self.0, self.1)
     }
 }
 
@@ -85,11 +85,11 @@ impl TxDigest {
     }
 
     pub fn is_dropped(&self) -> bool {
-        self.is_dropped.load(AtomicOrdering::Relaxed)
+        self.is_dropped.load(AtomicOrdering::Acquire)
     }
 
     pub fn set_dropped(&self) {
-        self.is_dropped.swap(true, AtomicOrdering::Acquire);
+        self.is_dropped.swap(true, AtomicOrdering::AcqRel);
     }
 }
 

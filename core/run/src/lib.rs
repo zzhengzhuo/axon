@@ -1,13 +1,17 @@
 #![allow(clippy::mutable_key_type)]
 
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::panic;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{collections::HashMap, convert::TryFrom, panic, sync::Arc, thread, time::Duration};
 
 use backtrace::Backtrace;
+#[cfg(all(
+    not(target_env = "msvc"),
+    not(target_os = "macos"),
+    feature = "jemalloc"
+))]
+use {
+    jemalloc_ctl::{Access, AsName},
+    jemallocator::Jemalloc,
+};
 
 use common_apm::metrics::mempool::{MEMPOOL_CO_QUEUE_LEN, MEMPOOL_LEN_GAUGE};
 use common_apm::{server::run_prometheus_server, tracing::global_tracer_register};
@@ -31,7 +35,8 @@ use core_consensus::{
     OverlordConsensusAdapter, OverlordSynchronization, SignedTxsWAL,
 };
 use core_cross_client::DefaultCrossAdapter;
-use core_executor::{EVMExecutorAdapter, EvmExecutor, MPTTrie, RocksTrieDB};
+use core_executor::{AxonExecutor, AxonExecutorAdapter, MPTTrie, RocksTrieDB};
+use core_interoperation::InteroperationImpl;
 use core_mempool::{
     DefaultMemPoolAdapter, MemPoolImpl, NewTxsHandler, PullTxsHandler, END_GOSSIP_NEW_TXS,
     RPC_PULL_TXS, RPC_RESP_PULL_TXS, RPC_RESP_PULL_TXS_SYNC,
@@ -40,9 +45,10 @@ use core_metadata::{MetadataAdapterImpl, MetadataController};
 use core_network::{
     observe_listen_port_occupancy, NetworkConfig, NetworkService, PeerId, PeerIdExt,
 };
+use core_rpc_client::RpcClient;
 use core_storage::{adapter::rocks::RocksAdapter, ImplStorage};
 use protocol::codec::{hex_decode, ProtocolCodec};
-use protocol::lazy::{ASSET_CONTRACT_ADDRESS, CHAIN_ID, CURRENT_STATE_ROOT};
+use protocol::lazy::{CHAIN_ID, CURRENT_STATE_ROOT};
 #[cfg(unix)]
 use protocol::tokio::signal::unix as os_impl;
 use protocol::tokio::{runtime::Builder as RuntimeBuilder, sync::Mutex as AsyncMutex, time::sleep};
@@ -50,9 +56,17 @@ use protocol::traits::{
     CommonStorage, Context, Executor, MemPool, MetadataControl, Network, NodeInfo, Storage,
 };
 use protocol::types::{
-    Account, Address, MerkleRoot, Proposal, RichBlock, Validator, NIL_DATA, RLP_NULL, U256,
+    Account, Address, MerkleRoot, Proposal, RichBlock, Validator, NIL_DATA, RLP_NULL,
 };
 use protocol::{tokio, Display, From, ProtocolError, ProtocolErrorKind, ProtocolResult};
+
+#[cfg(all(
+    not(target_env = "msvc"),
+    not(target_os = "macos"),
+    feature = "jemalloc"
+))]
+#[global_allocator]
+pub static JEMALLOC: Jemalloc = Jemalloc;
 
 #[derive(Debug)]
 pub struct Axon {
@@ -71,15 +85,12 @@ impl Axon {
     }
 
     pub fn run(mut self) -> ProtocolResult<()> {
-        if let Some(apm_config) = &self.config.apm {
-            global_tracer_register(
-                &apm_config.service_name,
-                apm_config.tracing_address,
-                apm_config.tracing_batch_size,
-            );
-
-            log::info!("muta_apm start");
-        }
+        #[cfg(all(
+            not(target_env = "msvc"),
+            not(target_os = "macos"),
+            feature = "jemalloc"
+        ))]
+        Self::set_profile(true);
 
         let rt = RuntimeBuilder::new_multi_thread()
             .enable_all()
@@ -95,10 +106,7 @@ impl Axon {
     pub async fn create_genesis(&mut self) -> ProtocolResult<()> {
         // Init Block db
         let path_block = self.config.data_path_for_block();
-        let rocks_adapter = Arc::new(RocksAdapter::new(
-            path_block,
-            self.config.rocksdb.max_open_files,
-        )?);
+        let rocks_adapter = Arc::new(RocksAdapter::new(path_block, self.config.rocksdb.clone())?);
         let storage = Arc::new(ImplStorage::new(rocks_adapter));
 
         match storage.get_latest_block(Context::new()).await {
@@ -117,7 +125,7 @@ impl Axon {
         let path_state = self.config.data_path_for_state();
         let trie_db = Arc::new(RocksTrieDB::new(
             path_state,
-            self.config.rocksdb.max_open_files,
+            self.config.rocksdb.clone(),
             self.config.executor.triedb_cache_size,
         )?);
         let mut mpt = MPTTrie::new(Arc::clone(&trie_db));
@@ -136,8 +144,8 @@ impl Axon {
         )?;
 
         let proposal = Proposal::from(self.genesis.block.clone());
-        let executor = EvmExecutor::default();
-        let mut backend = EVMExecutorAdapter::from_root(
+        let executor = AxonExecutor::default();
+        let mut backend = AxonExecutorAdapter::from_root(
             mpt.commit()?,
             trie_db,
             Arc::clone(&storage),
@@ -173,6 +181,17 @@ impl Axon {
     }
 
     pub async fn start(self) -> ProtocolResult<()> {
+        // Start jaeger
+        Self::run_jaeger(self.config.clone());
+        // Start prometheus http server
+        Self::run_prometheus_server(self.config.clone());
+        #[cfg(all(
+            not(target_env = "msvc"),
+            not(target_os = "macos"),
+            feature = "jemalloc"
+        ))]
+        tokio::spawn(common_memory_tracker::track_current_process());
+
         log::info!("node starts");
         observe_listen_port_occupancy(&[self.config.network.listening_address.clone()]).await?;
         let config = self.config.clone();
@@ -182,8 +201,19 @@ impl Axon {
 
         let rocks_adapter = Arc::new(RocksAdapter::new(
             path_block.clone(),
-            config.rocksdb.max_open_files,
+            config.rocksdb.clone(),
         )?);
+
+        #[cfg(all(
+            not(target_env = "msvc"),
+            not(target_os = "macos"),
+            feature = "jemalloc"
+        ))]
+        tokio::spawn(common_memory_tracker::track_db_process(
+            "blockdb",
+            rocks_adapter.inner_db(),
+        ));
+
         let storage = Arc::new(ImplStorage::new(rocks_adapter));
 
         // Init network
@@ -224,9 +254,19 @@ impl Axon {
         let path_state = config.data_path_for_state();
         let trie_db = Arc::new(RocksTrieDB::new(
             path_state,
-            config.rocksdb.max_open_files,
+            config.rocksdb.clone(),
             config.executor.triedb_cache_size,
         )?);
+
+        #[cfg(all(
+            not(target_env = "msvc"),
+            not(target_os = "macos"),
+            feature = "jemalloc"
+        ))]
+        tokio::spawn(common_memory_tracker::track_db_process(
+            "triedb",
+            trie_db.inner_db(),
+        ));
 
         // Init full transactions wal
         let txs_wal_path = config.data_path_for_txs_wal().to_str().unwrap().to_string();
@@ -249,13 +289,36 @@ impl Axon {
             current_block.header.number + 1
         );
 
+        let metadata_adapter = MetadataAdapterImpl::new(Arc::clone(&storage), Arc::clone(&trie_db));
+        let metadata_controller = Arc::new(MetadataController::new(
+            Arc::new(metadata_adapter),
+            self.config.metadata_contract_address.into(),
+            self.config.epoch_len,
+        ));
+
+        let metadata = metadata_controller.get_metadata(Context::new(), &current_block.header)?;
+
+        let ckb_client = RpcClient::new(
+            &self.config.cross_client.ckb_uri,
+            &self.config.cross_client.mercury_uri,
+        );
+
+        let interoperation = Arc::new(
+            InteroperationImpl::new(
+                self.config.interoperability_extension.clone().into(),
+                ckb_client.clone(),
+            )
+            .await?,
+        );
+
         // Init mempool
-        let mempool_adapter = DefaultMemPoolAdapter::<Secp256k1, _, _, _>::new(
+        let mempool_adapter = DefaultMemPoolAdapter::<Secp256k1, _, _, _, _, _>::new(
             network_service.handle(),
             Arc::clone(&storage),
             Arc::clone(&trie_db),
+            Arc::clone(&metadata_controller),
+            Arc::clone(&interoperation),
             self.genesis.block.header.chain_id,
-            config.mempool.timeout_gap,
             self.genesis.block.header.gas_limit.as_u64(),
             config.mempool.pool_size as usize,
             config.mempool.broadcast_txs_size,
@@ -264,6 +327,7 @@ impl Axon {
         let mempool = Arc::new(
             MemPoolImpl::new(
                 config.mempool.pool_size as usize,
+                config.mempool.timeout_gap,
                 mempool_adapter,
                 current_stxs.clone(),
             )
@@ -302,17 +366,6 @@ impl Axon {
 
         network_service.register_rpc_response(RPC_RESP_PULL_TXS_SYNC)?;
 
-        let metadata_adapter = MetadataAdapterImpl::new(Arc::clone(&storage), Arc::clone(&trie_db));
-        let metadata_controller = Arc::new(MetadataController::new(
-            Arc::new(metadata_adapter),
-            self.config.metadata_contract_address.into(),
-            self.config.epoch_len,
-        ));
-
-        let metadata = metadata_controller.get_metadata(Context::new(), &current_block.header)?;
-        common_apm::metrics::network::NETWORK_TAGGED_CONSENSUS_PEERS
-            .set(metadata.verifier_list.len() as i64);
-
         // Init Consensus
         let validators: Vec<Validator> = metadata
             .verifier_list
@@ -341,15 +394,13 @@ impl Axon {
                 max_tx_size:                metadata.max_tx_size.into(),
                 tx_num_limit:               metadata.tx_num_limit,
                 last_checkpoint_block_hash: metadata.last_checkpoint_block_hash,
-                gas_limit:                  metadata.gas_limit.into(),
-                base_fee_per_gas:           U256::one(),
                 proof:                      latest_proof,
             }
         } else {
             // Init executor
             let proposal = Proposal::from(current_header.clone());
-            let executor = EvmExecutor::default();
-            let mut backend = EVMExecutorAdapter::from_root(
+            let executor = AxonExecutor::default();
+            let mut backend = AxonExecutorAdapter::from_root(
                 current_header.state_root,
                 Arc::clone(&trie_db),
                 Arc::clone(&storage),
@@ -365,15 +416,12 @@ impl Axon {
                 max_tx_size:                metadata.max_tx_size.into(),
                 tx_num_limit:               metadata.tx_num_limit,
                 last_checkpoint_block_hash: metadata.last_checkpoint_block_hash,
-                gas_limit:                  metadata.gas_limit.into(),
-                base_fee_per_gas:           current_header.base_fee_per_gas,
                 proof:                      storage.get_latest_proof(Context::new()).await?,
             }
         };
 
         CURRENT_STATE_ROOT.swap(Arc::new(current_consensus_status.last_state_root));
         CHAIN_ID.swap(Arc::new(current_header.chain_id));
-        ASSET_CONTRACT_ADDRESS.swap(Arc::new(self.config.asset_contract_address.into()));
 
         // set args in mempool
         mempool.set_args(
@@ -390,6 +438,7 @@ impl Axon {
             Arc::clone(&mempool),
             Arc::clone(&storage),
             Arc::clone(&trie_db),
+            Arc::new(ckb_client),
         );
         let cross_handle = cross_client.handle();
 
@@ -516,9 +565,6 @@ impl Axon {
         ));
         let _handles = run_jsonrpc_server(self.config.clone(), api_adapter).await?;
 
-        // Start prometheus http server
-        Self::run_prometheus_server(config);
-
         // Run sync
         tokio::spawn(async move {
             if let Err(e) = synchronization.polling_broadcast().await {
@@ -553,7 +599,7 @@ impl Axon {
                 )
                 .await
             {
-                log::error!("muta-consensus: {:?} error", e);
+                log::error!("axon-consensus: {:?} error", e);
             }
         });
 
@@ -582,20 +628,49 @@ impl Axon {
 
         tokio::select! {
             _ = ctrl_c_handler => { log::info!("ctrl + c is pressed, quit.") },
-            _ = panic_receiver.recv() => { log::info!("child thraed panic, quit.") },
+            _ = panic_receiver.recv() => { log::info!("child thread panic, quit.") },
         };
+
+        #[cfg(all(
+            not(target_env = "msvc"),
+            not(target_os = "macos"),
+            feature = "jemalloc"
+        ))]
+        {
+            Self::set_profile(false);
+            Self::dump_profile();
+        }
 
         Ok(())
     }
 
+    fn run_jaeger(config: Config) {
+        if let Some(jaeger_config) = config.jaeger {
+            let service_name = match jaeger_config.service_name {
+                Some(name) => name,
+                None => "axon".to_string(),
+            };
+
+            let tracing_address = match jaeger_config.tracing_address {
+                Some(address) => address,
+                None => std::net::SocketAddr::from(([0, 0, 0, 0], 6831)),
+            };
+
+            let tracing_batch_size = jaeger_config.tracing_batch_size.unwrap_or(50);
+
+            global_tracer_register(&service_name, tracing_address, tracing_batch_size);
+            log::info!("jaeger start");
+        };
+    }
+
     fn run_prometheus_server(config: Config) {
-        let prometheus_listening_address = match config.apm {
-            Some(apm_config) => apm_config.prometheus_listening_address,
+        let prometheus_listening_address = match config.prometheus {
+            Some(prometheus_config) => prometheus_config.listening_address.unwrap(),
             None => std::net::SocketAddr::from(([0, 0, 0, 0], 8100)),
         };
-        tokio::spawn(async move {
-            run_prometheus_server(prometheus_listening_address).await;
-        });
+        tokio::spawn(run_prometheus_server(prometheus_listening_address));
+
+        log::info!("prometheus start");
     }
 
     fn panic_log(info: &panic::PanicInfo) {
@@ -619,11 +694,36 @@ impl Axon {
             backtrace,
         );
     }
+
+    #[cfg(all(
+        not(target_env = "msvc"),
+        not(target_os = "macos"),
+        feature = "jemalloc"
+    ))]
+    fn set_profile(is_active: bool) {
+        let _ = b"prof.active\0"
+            .name()
+            .write(is_active)
+            .map_err(|e| panic!("Set jemalloc profile error {:?}", e));
+    }
+
+    #[cfg(all(
+        not(target_env = "msvc"),
+        not(target_os = "macos"),
+        feature = "jemalloc"
+    ))]
+    fn dump_profile() {
+        let name = b"profile.out\0".as_ref();
+        b"prof.dump\0"
+            .name()
+            .write(name)
+            .expect("Should succeed to dump profile")
+    }
 }
 
 #[derive(Debug, Display, From)]
 pub enum MainError {
-    #[display(fmt = "The muta configuration read failed {:?}", _0)]
+    #[display(fmt = "The axon configuration read failed {:?}", _0)]
     ConfigParse(common_config_parser::ParseError),
 
     #[display(fmt = "{:?}", _0)]

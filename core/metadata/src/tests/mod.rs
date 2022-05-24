@@ -4,15 +4,15 @@ use std::fs::File;
 use std::io::BufReader;
 use std::sync::Arc;
 
-use ethers::core::abi::AbiEncode;
+use ethers_core::abi::AbiEncode;
 
 use core_executor::adapter::{MPTTrie, RocksTrieDB};
-use core_executor::{EVMExecutorAdapter, EvmExecutor};
+use core_executor::{AxonExecutor, AxonExecutorAdapter};
 use core_storage::{adapter::rocks::RocksAdapter, ImplStorage};
 use protocol::codec::ProtocolCodec;
 use protocol::traits::{CommonStorage, Context, Executor, Storage};
 use protocol::types::{
-    Account, Address, Header, Hex, Metadata, MetadataVersion, Proposal, Public, RichBlock,
+    Account, Address, Bytes, Header, Hex, Metadata, MetadataVersion, Proposal, Public, RichBlock,
     SignatureComponents, SignedTransaction, Transaction, TransactionAction, UnverifiedTransaction,
     ValidatorExtend, H160, H256, NIL_DATA, RLP_NULL, U256,
 };
@@ -23,7 +23,7 @@ const GENESIS_PATH: &str = "../../devtools/chain/genesis_single_node.json";
 
 lazy_static::lazy_static! {
     static ref METADATA_ADDRESS: H160
-        = H160::from_slice(&Hex::decode("0x4af5ec5e3d29d9ddd7f4bf91a022131c41b72352".to_string()).unwrap());
+        = H160::from_slice(&Hex::decode("0xa13763691970d9373d4fab7cc323d7ba06fa9986".to_string()).unwrap());
 }
 
 struct TestHandle {
@@ -35,9 +35,13 @@ struct TestHandle {
 impl TestHandle {
     pub async fn new(salt: u64) -> Self {
         let path = "./free-space/".to_string();
-        let storage_adapter =
-            RocksAdapter::new(path.clone() + &salt.to_string() + "/rocks", 1024).unwrap();
-        let trie_db = RocksTrieDB::new(path + &salt.to_string() + "/trie", 1024, 50).unwrap();
+        let storage_adapter = RocksAdapter::new(
+            path.clone() + &salt.to_string() + "/rocks",
+            Default::default(),
+        )
+        .unwrap();
+        let trie_db =
+            RocksTrieDB::new(path + &salt.to_string() + "/trie", Default::default(), 50).unwrap();
 
         let mut handle = TestHandle {
             storage:    Arc::new(ImplStorage::new(Arc::new(storage_adapter))),
@@ -70,8 +74,8 @@ impl TestHandle {
         .unwrap();
 
         let proposal = Proposal::from(genesis.block.clone());
-        let executor = EvmExecutor::default();
-        let mut backend = EVMExecutorAdapter::from_root(
+        let executor = AxonExecutor::default();
+        let mut backend = AxonExecutorAdapter::from_root(
             mpt.commit().unwrap(),
             Arc::clone(&self.trie_db),
             Arc::clone(&self.storage),
@@ -80,6 +84,8 @@ impl TestHandle {
         .unwrap();
 
         let resp = executor.exec(&mut backend, genesis.txs.clone());
+
+        println!("{:?}", resp);
 
         self.state_root = resp.state_root;
         self.storage
@@ -110,27 +116,27 @@ impl TestHandle {
     }
 
     pub fn exec(&mut self, txs: Vec<SignedTransaction>) {
-        let mut backend = EVMExecutorAdapter::from_root(
+        let mut backend = AxonExecutorAdapter::from_root(
             self.state_root,
             Arc::clone(&self.trie_db),
             Arc::clone(&self.storage),
             mock_proposal().into(),
         )
         .unwrap();
-        let resp = EvmExecutor::default().exec(&mut backend, txs);
+        let resp = AxonExecutor::default().exec(&mut backend, txs);
         println!("{:?}", resp);
         self.state_root = resp.state_root;
     }
 }
 
-fn mock_header(blocl_number: u64, state: H256) -> Header {
+fn mock_header(block_number: u64, state: H256) -> Header {
     Header {
         prev_hash:                  Default::default(),
         proposer:                   Default::default(),
         transactions_root:          Default::default(),
         signed_txs_hash:            Default::default(),
         timestamp:                  Default::default(),
-        number:                     blocl_number,
+        number:                     block_number,
         gas_limit:                  1000000000u64.into(),
         extra_data:                 Default::default(),
         mixed_hash:                 Default::default(),
@@ -184,16 +190,16 @@ fn mock_signed_tx(nonce: u64, data: Vec<u8>) -> SignedTransaction {
     let tx = UnverifiedTransaction {
         unsigned:  raw,
         signature: Some(SignatureComponents {
-            standard_v: 0,
-            r:          H256::default(),
-            s:          H256::default(),
+            standard_v: 2,
+            r:          Bytes::default(),
+            s:          Bytes::default(),
         }),
         chain_id:  0,
         hash:      Default::default(),
     };
 
     SignedTransaction {
-        transaction: tx.hash(),
+        transaction: tx.calc_hash(),
         sender:      Address::from_hex("0x8ab0cf264df99d83525e9e11c7e4db01558ae1b1")
             .unwrap()
             .0,
@@ -202,7 +208,7 @@ fn mock_signed_tx(nonce: u64, data: Vec<u8>) -> SignedTransaction {
 }
 
 fn mock_metadata(epoch: u64, start: u64, end: u64) -> Vec<u8> {
-    let r = BufReader::new(File::open("../../devtools/chain/metadata.json").unwrap());
+    let r = BufReader::new(File::open("./src/tests/metadata.json").unwrap());
     let mut metadata: Metadata = serde_json::from_reader(r).unwrap();
     metadata.epoch = epoch;
     metadata.version.start = start;

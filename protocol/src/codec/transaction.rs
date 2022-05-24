@@ -1,22 +1,30 @@
 use bytes::BufMut;
+use common_crypto::secp256k1_recover;
+use ethereum_types::BigEndianHash;
 use rlp::{Decodable, DecoderError, Encodable, Prototype, Rlp, RlpStream};
 
 use crate::types::{
-    AccessList, AccessListItem, Bytes, BytesMut, SignatureComponents, SignedTransaction,
-    Transaction, TransactionAction, UnverifiedTransaction, H256, U256,
+    public_to_address, AccessList, AccessListItem, Bytes, BytesMut, Public, SignatureComponents,
+    SignedTransaction, Transaction, TransactionAction, UnverifiedTransaction, H256, U256,
 };
 
 impl Encodable for SignatureComponents {
     fn rlp_append(&self, s: &mut RlpStream) {
-        s.append(&self.standard_v).append(&self.r).append(&self.s);
+        if self.is_eth_sig() {
+            let r = U256::from(&self.r[0..32]);
+            let s_ = U256::from(&self.s[0..32]);
+            s.append(&self.standard_v).append(&r).append(&s_);
+        } else {
+            s.append(&self.standard_v).append(&self.r).append(&self.s);
+        }
     }
 }
 
 impl Decodable for SignatureComponents {
     fn decode(r: &Rlp) -> Result<Self, DecoderError> {
         let standard_v: u8 = r.val_at(0)?;
-        let r_: H256 = r.val_at(1)?;
-        let s: H256 = r.val_at(2)?;
+        let r_: Bytes = r.val_at(1)?;
+        let s: Bytes = r.val_at(2)?;
 
         Ok(SignatureComponents {
             standard_v,
@@ -47,8 +55,8 @@ impl Encodable for UnverifiedTransaction {
         for access in self.unsigned.access_list.iter() {
             s.begin_list(2);
             s.append(&access.address);
-            s.begin_list(access.slots.len());
-            for storage_key in access.slots.iter() {
+            s.begin_list(access.storage_keys.len());
+            for storage_key in access.storage_keys.iter() {
                 s.append(storage_key);
             }
         }
@@ -63,7 +71,7 @@ impl Encodable for UnverifiedTransaction {
         let mut s = RlpStream::new();
         self.rlp_append(&mut s);
         ret.put_u8(0x02);
-        ret.put(s.out());
+        ret.put(s.as_raw());
         ret
     }
 }
@@ -96,15 +104,27 @@ impl Decodable for UnverifiedTransaction {
             }
 
             access_list.push(AccessListItem {
-                address: accounts.val_at(0)?,
-                slots:   accounts.list_at(1)?,
+                address:      accounts.val_at(0)?,
+                storage_keys: accounts.list_at(1)?,
             });
         }
 
+        let v: u8 = r.val_at(9)?;
+        let eth_tx_flag = v <= 1;
         let signature = SignatureComponents {
-            standard_v: r.val_at(9)?,
-            r:          r.val_at(10)?,
-            s:          r.val_at(11)?,
+            standard_v: v,
+            r:          if eth_tx_flag {
+                let tmp: U256 = r.val_at(10)?;
+                Bytes::from(<H256 as BigEndianHash>::from_uint(&tmp).as_bytes().to_vec())
+            } else {
+                r.val_at(10)?
+            },
+            s:          if eth_tx_flag {
+                let tmp: U256 = r.val_at(11)?;
+                Bytes::from(<H256 as BigEndianHash>::from_uint(&tmp).as_bytes().to_vec())
+            } else {
+                r.val_at(11)?
+            },
         };
 
         let utx = UnverifiedTransaction {
@@ -123,27 +143,40 @@ impl Decodable for UnverifiedTransaction {
             chain_id,
         };
 
-        Ok(utx.hash())
+        Ok(utx.calc_hash())
     }
 }
 
 impl Encodable for SignedTransaction {
     fn rlp_append(&self, s: &mut RlpStream) {
-        s.begin_list(3)
-            .append(&self.transaction)
-            .append(&self.sender)
-            .append(&self.public);
+        s.begin_list(1).append(&self.transaction);
     }
 }
 
 impl Decodable for SignedTransaction {
     fn decode(r: &Rlp) -> Result<Self, DecoderError> {
         match r.prototype()? {
-            Prototype::List(3) => Ok(SignedTransaction {
-                transaction: r.val_at(0)?,
-                sender:      r.val_at(1)?,
-                public:      r.val_at(2)?,
-            }),
+            Prototype::List(1) => {
+                let utx: UnverifiedTransaction = r.val_at(0)?;
+                let public = Public::from_slice(
+                    &secp256k1_recover(
+                        utx.signature_hash().as_bytes(),
+                        utx.signature
+                            .as_ref()
+                            .ok_or(DecoderError::Custom("missing signature"))?
+                            .as_bytes()
+                            .as_ref(),
+                    )
+                    .map_err(|_| DecoderError::Custom("recover signature"))?
+                    .serialize_uncompressed()[1..65],
+                );
+
+                Ok(SignedTransaction {
+                    transaction: utx,
+                    sender:      public_to_address(&public),
+                    public:      Some(public),
+                })
+            }
             _ => Err(DecoderError::RlpInconsistentLengthAndData),
         }
     }
@@ -152,9 +185,13 @@ impl Decodable for SignedTransaction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::hex_decode;
-    use crate::types::{Bytes, TransactionAction, H160, U256};
+
     use rand::random;
+
+    use common_crypto::secp256k1_recover;
+
+    use crate::codec::hex_decode;
+    use crate::types::{Bytes, Public, TransactionAction, H160, H256, U256};
 
     fn rand_bytes(len: usize) -> Bytes {
         Bytes::from((0..len).map(|_| random::<u8>()).collect::<Vec<_>>())
@@ -176,8 +213,8 @@ mod tests {
     fn mock_sig_component() -> SignatureComponents {
         SignatureComponents {
             standard_v: 4,
-            r:          H256::default(),
-            s:          H256::default(),
+            r:          Bytes::default(),
+            s:          Bytes::default(),
         }
     }
 
@@ -188,7 +225,7 @@ mod tests {
             hash:      H256::default(),
             signature: Some(mock_sig_component()),
         }
-        .hash()
+        .calc_hash()
     }
 
     fn mock_signed_tx() -> SignedTransaction {
@@ -201,7 +238,9 @@ mod tests {
 
     #[test]
     fn test_signed_tx_codec() {
-        let origin = mock_signed_tx();
+        let raw = hex_decode("02f8670582010582012c82012c825208945cf83df52a32165a7f392168ac009b168c9e89150180c001a0a68aeb0db4d84cf16da5a6918becefd254654854cfc23f0112ef78154ce84db89f4b0af1cbf12f5bfaec81c3d4d495717d720b574a05092f6b436c2ab255cd35").unwrap();
+        let utx = UnverifiedTransaction::decode(&Rlp::new(&raw[1..])).unwrap();
+        let origin: SignedTransaction = utx.try_into().unwrap();
         let encode = origin.rlp_bytes().freeze().to_vec();
         let decode: SignedTransaction = rlp::decode(&encode).unwrap();
         assert_eq!(origin, decode);
@@ -213,5 +252,33 @@ mod tests {
         let rlp = Rlp::new(&raw[1..]);
         let res = UnverifiedTransaction::decode(&rlp);
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_decode_unverified_tx() {
+        let raw = hex_decode("02f8670582010582012c82012c825208945cf83df52a32165a7f392168ac009b168c9e89150180c001a0a68aeb0db4d84cf16da5a6918becefd254654854cfc23f0112ef78154ce84db89f4b0af1cbf12f5bfaec81c3d4d495717d720b574a05092f6b436c2ab255cd35").unwrap();
+        let utx = UnverifiedTransaction::decode(&Rlp::new(&raw[1..])).unwrap();
+        let _public = Public::from_slice(
+            &secp256k1_recover(
+                utx.hash.as_bytes(),
+                utx.signature.as_ref().unwrap().as_bytes().as_ref(),
+            )
+            .unwrap()
+            .serialize_uncompressed()[1..65],
+        );
+
+        let sig = utx.signature.unwrap();
+        assert_ne!(sig.s, sig.r);
+    }
+
+    #[test]
+    fn test_calc_tx_hash() {
+        let raw = hex_decode("02f8690505030382520894a15da349978753d846eede580c7de8e590c1e5b8872386f26fc1000080c080a097d7a69ce423c2a5814daf71345b49698db5839e092f744e263983b56a992b87a02a5e12966dccbc8e3f6f21ffb528372c915c202381cfcbe3b8cf8ef8af273e99").unwrap();
+        let utx = UnverifiedTransaction::decode(&Rlp::new(&raw[1..])).unwrap();
+        let hash = utx.calc_hash().hash;
+        assert_eq!(
+            hash.as_bytes(),
+            hex_decode("4c6d0ffa15709084a4b2b546f32503e4ccf2fb26b6c894df773b2d14b7c96e3f").unwrap()
+        );
     }
 }

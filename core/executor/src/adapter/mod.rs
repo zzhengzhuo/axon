@@ -25,14 +25,14 @@ macro_rules! blocking_async {
     }};
 }
 
-pub struct EVMExecutorAdapter<S, DB: cita_trie::DB> {
+pub struct AxonExecutorAdapter<S, DB: cita_trie::DB> {
     exec_ctx: ExecutorContext,
     trie:     MPTTrie<DB>,
     storage:  Arc<S>,
     db:       Arc<DB>,
 }
 
-impl<S, DB> ExecutorAdapter for EVMExecutorAdapter<S, DB>
+impl<S, DB> ExecutorAdapter for AxonExecutorAdapter<S, DB>
 where
     S: Storage + 'static,
     DB: cita_trie::DB + 'static,
@@ -51,8 +51,8 @@ where
         ret
     }
 
-    fn state_root(&self) -> MerkleRoot {
-        self.trie.root
+    fn commit(&mut self) -> MerkleRoot {
+        self.trie.commit().unwrap()
     }
 
     fn get(&self, key: &[u8]) -> Option<Bytes> {
@@ -60,7 +60,7 @@ where
     }
 }
 
-impl<S, DB> Backend for EVMExecutorAdapter<S, DB>
+impl<S, DB> Backend for AxonExecutorAdapter<S, DB>
 where
     S: Storage + 'static,
     DB: cita_trie::DB + 'static,
@@ -142,7 +142,7 @@ where
 
         let res = blocking_async!(self, storage, get_code_by_hash, Context::new(), &code_hash);
 
-        res.unwrap().to_vec()
+        res.unwrap_or_default().to_vec()
     }
 
     fn storage(&self, address: H160, index: H256) -> H256 {
@@ -177,7 +177,7 @@ where
     }
 }
 
-impl<S, DB> ApplyBackend for EVMExecutorAdapter<S, DB>
+impl<S, DB> ApplyBackend for AxonExecutorAdapter<S, DB>
 where
     S: Storage + 'static,
     DB: cita_trie::DB + 'static,
@@ -200,7 +200,6 @@ where
                     let is_empty = self.apply(address, basic, code, storage, reset_storage);
                     if is_empty && delete_empty {
                         self.trie.remove(address.as_bytes()).unwrap();
-                        self.trie.commit().unwrap();
                     }
                 }
                 Apply::Delete { address } => {
@@ -213,14 +212,14 @@ where
     }
 }
 
-impl<S, DB> EVMExecutorAdapter<S, DB>
+impl<S, DB> AxonExecutorAdapter<S, DB>
 where
     S: Storage + 'static,
     DB: cita_trie::DB + 'static,
 {
     pub fn new(db: Arc<DB>, storage: Arc<S>, exec_ctx: ExecutorContext) -> ProtocolResult<Self> {
         let trie = MPTTrie::new(Arc::clone(&db));
-        Ok(EVMExecutorAdapter {
+        Ok(AxonExecutorAdapter {
             trie,
             db,
             storage,
@@ -236,16 +235,12 @@ where
     ) -> ProtocolResult<Self> {
         let trie = MPTTrie::from_root(state_root, Arc::clone(&db))?;
 
-        Ok(EVMExecutorAdapter {
+        Ok(AxonExecutorAdapter {
             trie,
             db,
             storage,
             exec_ctx,
         })
-    }
-
-    pub fn root(&self) -> MerkleRoot {
-        self.trie.root
     }
 
     fn apply<I: IntoIterator<Item = (H256, H256)>>(
@@ -282,12 +277,11 @@ where
             let _ = storage_trie.insert(k.as_bytes(), v.as_bytes());
         });
 
-        let new_storage_root = storage_trie.commit().unwrap_or(RLP_NULL);
         let mut new_account = Account {
             nonce:        basic.nonce,
             balance:      basic.balance,
             code_hash:    old_account.code_hash,
-            storage_root: new_storage_root,
+            storage_root: storage_trie.commit().unwrap_or(RLP_NULL),
         };
 
         if let Some(c) = code {
@@ -313,7 +307,6 @@ where
             self.trie
                 .insert(address.as_bytes(), bytes.as_ref())
                 .unwrap();
-            self.trie.commit().unwrap();
         }
 
         new_account.balance == U256::zero()

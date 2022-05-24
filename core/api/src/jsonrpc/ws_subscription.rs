@@ -1,4 +1,5 @@
 use std::{
+    io,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -7,6 +8,7 @@ use std::{
 };
 
 use jsonrpsee::{
+    core::Error,
     types::{error::CallError, params::Params, SubscriptionId},
     ws_server::{IdProvider, RpcModule, SubscriptionSink},
 };
@@ -25,7 +27,7 @@ use protocol::{
 
 use crate::jsonrpc::{
     r#impl::from_receipt_to_web3_log,
-    web3_types::{Web3Header, Web3SyncStatus},
+    web3_types::{MultiType, Web3Header, Web3SyncStatus},
 };
 
 pub async fn ws_subscription_module<Adapter>(adapter: Arc<Adapter>) -> RpcModule<Sender<RawHub>>
@@ -43,14 +45,20 @@ where
         "eth_subscription",
         "eth_subscription",
         "eth_unsubscribe",
-        |params, sink, ctx| {
-            let typ = Type::try_from(params)?;
-            let raw_hub = RawHub { typ, sink };
+        |params, pending, ctx| match Type::try_from(params) {
+            Ok(typ) => {
+                if let Some(sink) = pending.accept() {
+                    let raw_hub = RawHub { typ, sink };
 
-            tokio::spawn(async move {
-                let _ignore = ctx.send(raw_hub).await;
-            });
-            Ok(())
+                    tokio::spawn(async move {
+                        let _ignore = ctx.send(raw_hub).await;
+                    });
+                }
+            }
+            Err(e) => {
+                let e: Error = e.into();
+                pending.reject(e);
+            }
         },
     )
     .unwrap();
@@ -171,7 +179,7 @@ where
                     let log_len = receipt.logs.len();
                     for hub in self.log_hubs.iter_mut() {
                         match hub.filter.address {
-                            Some(ref s) if s == &receipt.sender => from_receipt_to_web3_log(
+                            Some(ref s) if s.contains(&receipt.sender) => from_receipt_to_web3_log(
                                 index,
                                 hub.filter.topics.as_ref().unwrap_or(&Vec::new()),
                                 &receipt,
@@ -245,22 +253,37 @@ impl<'a> TryFrom<Params<'a>> for Type {
             "newHeads" => Ok(Type::NewHeads),
             "syncing" => Ok(Type::Syncing),
             "logs" => {
-                let filter: LoggerFilter = iter.next()?;
-                Ok(Type::Logs(filter))
+                let filter: RawLoggerFilter = iter.next()?;
+                Ok(Type::Logs(filter.into()))
             }
-            _ => Err(CallError::Custom {
-                code:    -1,
-                message: format!("invalid method: {}", method),
-                data:    None,
-            }),
+            _ => Err(CallError::from_std_error(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid method: {}", method),
+            ))),
         }
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-struct LoggerFilter {
-    address: Option<H160>,
+struct RawLoggerFilter {
+    #[serde(default)]
+    address: MultiType<H160>,
     topics:  Option<Vec<Hash>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+struct LoggerFilter {
+    address: Option<Vec<H160>>,
+    topics:  Option<Vec<Hash>>,
+}
+
+impl From<RawLoggerFilter> for LoggerFilter {
+    fn from(src: RawLoggerFilter) -> Self {
+        LoggerFilter {
+            address: src.address.into(),
+            topics:  src.topics,
+        }
+    }
 }
 
 pub struct RawHub {

@@ -3,7 +3,7 @@ use super::TxContext;
 pub mod message;
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::{error::Error, marker::PhantomData, sync::Arc, time::Duration};
+use std::{collections::HashMap, error::Error, marker::PhantomData, sync::Arc, time::Duration};
 
 use dashmap::DashMap;
 use futures::{
@@ -13,32 +13,32 @@ use futures::{
 use log::{debug, error};
 use parking_lot::Mutex;
 
+use common_apm_derive::trace_span;
 use common_crypto::{Crypto, Secp256k1Recoverable};
-use core_executor::{EVMExecutorAdapter, EvmExecutor};
+use core_executor::{is_call_system_script, AxonExecutor, AxonExecutorAdapter};
+use core_interoperation::{get_ckb_transaction_hash, BlockchainType};
 use protocol::traits::{
-    Context, Executor, Gossip, MemPoolAdapter, PeerTrust, Priority, Rpc, Storage, TrustFeedback,
+    Context, Executor, Gossip, Interoperation, MemPoolAdapter, MetadataControl, PeerTrust,
+    Priority, Rpc, Storage, TrustFeedback,
 };
-use protocol::types::{recover_intact_pub_key, Hash, MerkleRoot, SignedTransaction, H160, U256};
+use protocol::types::{
+    recover_intact_pub_key, Bytes, Hash, MerkleRoot, SignedTransaction, H160, U256,
+};
 use protocol::{
-    async_trait, codec::ProtocolCodec, lazy::CURRENT_STATE_ROOT, Display, ProtocolError,
+    async_trait, codec::ProtocolCodec, lazy::CURRENT_STATE_ROOT, tokio, Display, ProtocolError,
     ProtocolErrorKind, ProtocolResult,
 };
-
-use protocol::tokio;
 
 use crate::adapter::message::{
     MsgNewTxs, MsgPullTxs, MsgPushTxs, END_GOSSIP_NEW_TXS, RPC_PULL_TXS,
 };
 use crate::MemPoolError;
 
-pub const DEFAULT_BROADCAST_TXS_SIZE: usize = 200;
-pub const DEFAULT_BROADCAST_TXS_INTERVAL: u64 = 200; // milliseconds
-
 struct IntervalTxsBroadcaster;
 
 impl IntervalTxsBroadcaster {
     pub async fn broadcast<G>(
-        stx_rx: UnboundedReceiver<SignedTransaction>,
+        stx_rx: UnboundedReceiver<(Option<usize>, SignedTransaction)>,
         interval_ms: u64,
         tx_size: usize,
         gossip: G,
@@ -47,17 +47,21 @@ impl IntervalTxsBroadcaster {
         G: Gossip + Clone + Unpin + 'static,
     {
         let mut stx_rx = stx_rx;
-        let mut txs_cache = Vec::with_capacity(tx_size);
+        let mut txs_cache = HashMap::with_capacity(10);
         let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
                 opt_stx = stx_rx.next() => {
-                    if let Some(stx) = opt_stx {
-                        txs_cache.push(stx);
+                    if let Some((origin, stx)) = opt_stx {
+                        txs_cache.entry(origin).or_insert(Vec::new()).push(stx);
 
-                        if txs_cache.len() == tx_size {
+                        let len: usize = {
+                            txs_cache.values().map(|v| v.len()).sum()
+                        };
+
+                        if len == tx_size {
                             Self::do_broadcast(&mut txs_cache, &gossip, err_tx.clone()).await
                         }
                     } else {
@@ -75,7 +79,7 @@ impl IntervalTxsBroadcaster {
     }
 
     async fn do_broadcast<G>(
-        txs_cache: &mut Vec<SignedTransaction>,
+        txs_cache: &mut HashMap<Option<usize>, Vec<SignedTransaction>>,
         gossip: &G,
         err_tx: UnboundedSender<ProtocolError>,
     ) where
@@ -85,12 +89,6 @@ impl IntervalTxsBroadcaster {
             return;
         }
 
-        let batch_stxs = txs_cache.drain(..).collect::<Vec<_>>();
-        let gossip_msg = MsgNewTxs { batch_stxs };
-
-        let ctx = Context::new();
-        let end = END_GOSSIP_NEW_TXS;
-
         let report_if_err = move |ret: ProtocolResult<()>| {
             if let Err(err) = ret {
                 if err_tx.unbounded_send(err).is_err() {
@@ -99,44 +97,55 @@ impl IntervalTxsBroadcaster {
             }
         };
 
-        report_if_err(
-            gossip
-                .broadcast(ctx, end, gossip_msg, Priority::Normal)
-                .await,
-        )
+        for (origin, batch_stxs) in txs_cache.drain() {
+            let gossip_msg = MsgNewTxs { batch_stxs };
+
+            let ctx = Context::new();
+            let end = END_GOSSIP_NEW_TXS;
+
+            report_if_err(
+                gossip
+                    .gossip(ctx, origin, end, gossip_msg, Priority::Normal)
+                    .await,
+            )
+        }
     }
 }
 
-pub struct DefaultMemPoolAdapter<C, N, S, DB> {
-    network: N,
-    storage: Arc<S>,
-    trie_db: Arc<DB>,
+pub struct DefaultMemPoolAdapter<C, N, S, DB, M, I> {
+    network:        N,
+    storage:        Arc<S>,
+    trie_db:        Arc<DB>,
+    metadata:       Arc<M>,
+    interoperation: Arc<I>,
 
-    addr_nonce:   DashMap<H160, U256>,
-    _timeout_gap: AtomicU64,
-    gas_limit:    AtomicU64,
-    max_tx_size:  AtomicUsize,
-    chain_id:     u64,
+    addr_nonce:  DashMap<H160, U256>,
+    gas_limit:   AtomicU64,
+    max_tx_size: AtomicUsize,
+    chain_id:    u64,
 
-    stx_tx: UnboundedSender<SignedTransaction>,
+    stx_tx: UnboundedSender<(Option<usize>, SignedTransaction)>,
     err_rx: Mutex<UnboundedReceiver<ProtocolError>>,
 
     pin_c: PhantomData<C>,
 }
 
-impl<C, N, S, DB> DefaultMemPoolAdapter<C, N, S, DB>
+impl<C, N, S, DB, M, I> DefaultMemPoolAdapter<C, N, S, DB, M, I>
 where
     C: Crypto,
     N: Rpc + PeerTrust + Gossip + Clone + Unpin + 'static,
     S: Storage,
     DB: cita_trie::DB + 'static,
+    M: MetadataControl + 'static,
+    I: Interoperation + 'static,
 {
     pub fn new(
         network: N,
         storage: Arc<S>,
         trie_db: Arc<DB>,
+        metadata: Arc<M>,
+        interoperation: Arc<I>,
         chain_id: u64,
-        timeout_gap: u64,
         gas_limit: u64,
         max_tx_size: usize,
         broadcast_txs_size: usize,
@@ -157,9 +166,10 @@ where
             network,
             storage,
             trie_db,
+            metadata,
+            interoperation,
 
             addr_nonce: DashMap::new(),
-            _timeout_gap: AtomicU64::new(timeout_gap),
             gas_limit: AtomicU64::new(gas_limit),
             max_tx_size: AtomicUsize::new(max_tx_size),
             chain_id,
@@ -170,20 +180,41 @@ where
             pin_c: PhantomData,
         }
     }
+
+    async fn check_system_script_tx_authorization(
+        &self,
+        ctx: Context,
+        stx: &SignedTransaction,
+    ) -> ProtocolResult<()> {
+        let addr = &stx.sender;
+        let block = self.storage.get_latest_block(ctx.clone()).await?;
+        let metadata = self
+            .metadata
+            .get_metadata_unchecked(ctx, block.header.number + 1);
+
+        if metadata.verifier_list.iter().any(|ve| &ve.address == addr) {
+            return Ok(());
+        }
+
+        Err(MemPoolError::CheckAuthorization {
+            tx_hash:  stx.transaction.hash,
+            err_info: "Invalid system script transaction".to_string(),
+        }
+        .into())
+    }
 }
 
 #[async_trait]
-impl<C, N, S, DB> MemPoolAdapter for DefaultMemPoolAdapter<C, N, S, DB>
+impl<C, N, S, DB, M, I> MemPoolAdapter for DefaultMemPoolAdapter<C, N, S, DB, M, I>
 where
     C: Crypto + Send + Sync + 'static,
     N: Rpc + PeerTrust + Gossip + Clone + Unpin + 'static,
     S: Storage + 'static,
     DB: cita_trie::DB + 'static,
+    M: MetadataControl + 'static,
+    I: Interoperation + 'static,
 {
-    // #[muta_apm::derive::tracing_span(
-    //     kind = "mempool.adapter",
-    //     logs = "{'txs_len': 'tx_hashes.len()'}"
-    // )]
+    #[trace_span(kind = "mempool.adapter", logs = "{txs_len: tx_hashes.len()}")]
     async fn pull_txs(
         &self,
         ctx: Context,
@@ -203,9 +234,14 @@ where
         Ok(resp_msg.sig_txs)
     }
 
-    async fn broadcast_tx(&self, _ctx: Context, stx: SignedTransaction) -> ProtocolResult<()> {
+    async fn broadcast_tx(
+        &self,
+        _ctx: Context,
+        origin: Option<usize>,
+        stx: SignedTransaction,
+    ) -> ProtocolResult<()> {
         self.stx_tx
-            .unbounded_send(stx)
+            .unbounded_send((origin, stx))
             .map_err(AdapterError::from)?;
 
         if let Some(mut err_rx) = self.err_rx.try_lock() {
@@ -221,9 +257,13 @@ where
 
     async fn check_authorization(
         &self,
-        _ctx: Context,
+        ctx: Context,
         tx: &SignedTransaction,
     ) -> ProtocolResult<()> {
+        if is_call_system_script(&tx.transaction.unsigned.action) {
+            return self.check_system_script_tx_authorization(ctx, tx).await;
+        }
+
         let addr = &tx.sender;
         if let Some(res) = self.addr_nonce.get(addr) {
             if res.value() >= &tx.transaction.unsigned.nonce {
@@ -237,14 +277,14 @@ where
             }
         }
 
-        let backend = EVMExecutorAdapter::from_root(
+        let backend = AxonExecutorAdapter::from_root(
             **CURRENT_STATE_ROOT.load(),
             Arc::clone(&self.trie_db),
             Arc::clone(&self.storage),
             Default::default(),
         )?;
 
-        let account = EvmExecutor::default().get_account(&backend, addr);
+        let account = AxonExecutor::default().get_account(&backend, addr);
         self.addr_nonce.insert(*addr, account.nonce);
 
         if account.nonce >= tx.transaction.unsigned.nonce {
@@ -271,7 +311,7 @@ where
         let tx_hash = stx.transaction.hash;
 
         // check tx size
-        if fixed_bytes.len() > self.max_tx_size.load(Ordering::SeqCst) {
+        if fixed_bytes.len() > self.max_tx_size.load(Ordering::Acquire) {
             if ctx.is_network_origin_txs() {
                 self.network.report(
                     ctx,
@@ -280,7 +320,7 @@ where
             }
             return Err(MemPoolError::ExceedSizeLimit {
                 tx_hash,
-                max_tx_size: self.max_tx_size.load(Ordering::SeqCst),
+                max_tx_size: self.max_tx_size.load(Ordering::Acquire),
                 size: fixed_bytes.len(),
             }
             .into());
@@ -288,7 +328,7 @@ where
 
         // check gas limit
         let gas_limit_tx = stx.transaction.unsigned.gas_limit;
-        if gas_limit_tx.as_u64() > self.gas_limit.load(Ordering::SeqCst) {
+        if gas_limit_tx.as_u64() > self.gas_limit.load(Ordering::Acquire) {
             if ctx.is_network_origin_txs() {
                 self.network.report(
                     ctx,
@@ -298,7 +338,7 @@ where
             return Err(MemPoolError::ExceedGasLimit {
                 tx_hash,
                 gas_limit_tx: gas_limit_tx.as_u64(),
-                gas_limit_config: self.gas_limit.load(Ordering::SeqCst),
+                gas_limit_config: self.gas_limit.load(Ordering::Acquire),
             }
             .into());
         }
@@ -317,17 +357,29 @@ where
         }
 
         // Verify signature
-        Secp256k1Recoverable::verify_signature(
-            stx.transaction.signature_hash().as_bytes(),
-            stx.transaction
-                .signature
-                .clone()
-                .unwrap()
-                .as_bytes()
-                .as_ref(),
-            recover_intact_pub_key(&stx.public.unwrap()).as_bytes(),
-        )
-        .map_err(|err| AdapterError::VerifySignature(err.to_string()))?;
+        let signature = stx.transaction.signature.clone().unwrap();
+        match BlockchainType::from(signature.standard_v) {
+            BlockchainType::Ethereum => {
+                // use original Secp256k1 library to verify
+                Secp256k1Recoverable::verify_signature(
+                    stx.transaction.signature_hash().as_bytes(),
+                    signature.as_bytes().as_ref(),
+                    recover_intact_pub_key(&stx.public.unwrap()).as_bytes(),
+                )
+                .map_err(|err| AdapterError::VerifySignature(err.to_string()))?;
+            }
+            BlockchainType::Other(blockchain_id) => {
+                let tx_hash = get_ckb_transaction_hash(blockchain_id)?;
+                let args = [
+                    Bytes::from(Vec::from(stx.transaction.signature_hash().to_fixed_bytes())),
+                    signature.r,
+                    signature.s,
+                ];
+                self.interoperation
+                    .call_ckb_vm(Default::default(), tx_hash, &args, u64::MAX)
+                    .map_err(|err| AdapterError::VerifySignature(err.to_string()))?;
+            }
+        };
 
         Ok(())
     }
@@ -369,9 +421,9 @@ where
         cycles_limit: u64,
         max_tx_size: u64,
     ) {
-        self.gas_limit.store(cycles_limit, Ordering::Relaxed);
+        self.gas_limit.store(cycles_limit, Ordering::Release);
         self.max_tx_size
-            .store(max_tx_size as usize, Ordering::Relaxed);
+            .store(max_tx_size as usize, Ordering::Release);
         self.addr_nonce.clear();
     }
 
@@ -461,6 +513,27 @@ mod tests {
             Ok(())
         }
 
+        async fn gossip<M>(
+            &self,
+            _: Context,
+            _: Option<usize>,
+            _: &str,
+            mut msg: M,
+            _: Priority,
+        ) -> ProtocolResult<()>
+        where
+            M: MessageCodec,
+        {
+            let bytes = msg.encode_msg().expect("encode message fail");
+            self.msgs.lock().push(bytes);
+
+            self.signal_tx
+                .unbounded_send(())
+                .expect("send broadcast signal fail");
+
+            Ok(())
+        }
+
         async fn multicast<'a, M, P>(
             &self,
             _: Context,
@@ -501,7 +574,7 @@ mod tests {
         ));
 
         for stx in default_mock_txs(11).into_iter() {
-            stx_tx.unbounded_send(stx).expect("send stx fail");
+            stx_tx.unbounded_send((None, stx)).expect("send stx fail");
         }
 
         broadcast_signal_rx.next().await;
@@ -529,7 +602,7 @@ mod tests {
         ));
 
         for stx in default_mock_txs(9).into_iter() {
-            stx_tx.unbounded_send(stx).expect("send stx fail");
+            stx_tx.unbounded_send((None, stx)).expect("send stx fail");
         }
 
         broadcast_signal_rx.next().await;
@@ -557,7 +630,7 @@ mod tests {
         ));
 
         for stx in default_mock_txs(19).into_iter() {
-            stx_tx.unbounded_send(stx).expect("send stx fail");
+            stx_tx.unbounded_send((None, stx)).expect("send stx fail");
         }
 
         // Should got two broadcast

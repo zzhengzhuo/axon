@@ -10,7 +10,7 @@ pub trait ExecutorAdapter {
 
     fn get_logs(&mut self) -> Vec<Log>;
 
-    fn state_root(&self) -> MerkleRoot;
+    fn commit(&mut self) -> MerkleRoot;
 
     fn get(&self, key: &[u8]) -> Option<Bytes>;
 
@@ -18,7 +18,13 @@ pub trait ExecutorAdapter {
 }
 
 pub trait Executor: Send + Sync {
-    fn call<B: Backend>(&self, backend: &mut B, addr: H160, data: Vec<u8>) -> TxResp;
+    fn call<B: Backend>(
+        &self,
+        backend: &mut B,
+        from: Option<H160>,
+        to: Option<H160>,
+        data: Vec<u8>,
+    ) -> TxResp;
 
     fn exec<B: Backend + ApplyBackend + ExecutorAdapter>(
         &self,

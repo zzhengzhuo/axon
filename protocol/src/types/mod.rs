@@ -3,17 +3,21 @@ pub use ethereum::Log;
 pub use batch::*;
 pub use block::*;
 pub use bytes::{Buf, BufMut, Bytes, BytesMut};
-pub use evm::{backend::*, ExitSucceed};
+pub use ckb_client::*;
+pub use evm::{backend::*, ExitRevert, ExitSucceed};
 pub use executor::{
     AccessList, AccessListItem, Account, Config, ExecResp, ExecutorContext, ExitReason, TxResp,
 };
+pub use interoperation::VMResp;
 pub use primitive::*;
 pub use receipt::*;
 pub use transaction::*;
 
 pub mod batch;
 pub mod block;
+pub mod ckb_client;
 pub mod executor;
+pub mod interoperation;
 pub mod primitive;
 pub mod receipt;
 pub mod transaction;
@@ -31,11 +35,18 @@ pub enum TypesError {
     #[display(fmt = "Expect {:?}, get {:?}.", expect, real)]
     LengthMismatch { expect: usize, real: usize },
 
-    #[display(fmt = "{:?}", error)]
-    FromHex { error: hex_simd::Error },
+    #[display(
+        fmt = "Transaction hash mismatch origin {:?}, computed {:?}",
+        origin,
+        calc
+    )]
+    TxHashMismatch { origin: H256, calc: H256 },
 
-    #[display(fmt = "{:?} is an invalid address", address)]
-    InvalidAddress { address: String },
+    #[display(fmt = "{:?}", _0)]
+    FromHex(faster_hex::Error),
+
+    #[display(fmt = "{:?} is an invalid address", _0)]
+    InvalidAddress(String),
 
     #[display(fmt = "Hex should start with 0x")]
     HexPrefix,

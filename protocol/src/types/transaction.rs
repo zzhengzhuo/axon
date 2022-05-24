@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use common_crypto::secp256k1_recover;
 
 use crate::types::{Bytes, BytesMut, Hash, Hasher, Public, TypesError, H160, H256, H520, U256};
+use crate::ProtocolResult;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Transaction {
@@ -41,14 +42,13 @@ impl std::hash::Hash for Transaction {
 
 impl Transaction {
     pub fn encode(&self, chain_id: u64, signature: Option<SignatureComponents>) -> BytesMut {
-        let utx = UnverifiedTransaction {
+        UnverifiedTransaction {
             unsigned: self.clone(),
             chain_id,
             signature,
             hash: Default::default(),
-        };
-
-        utx.rlp_bytes()
+        }
+        .rlp_bytes()
     }
 }
 
@@ -61,14 +61,25 @@ pub struct UnverifiedTransaction {
 }
 
 impl UnverifiedTransaction {
-    pub fn hash(mut self) -> Self {
-        let hash = Hasher::digest(&self.rlp_bytes());
+    pub fn calc_hash(mut self) -> Self {
+        debug_assert!(self.signature.is_some());
+        let hash = Hasher::digest(&self.unsigned.encode(self.chain_id, self.signature.clone()));
         self.hash = hash;
         self
     }
 
-    pub fn check_hash(&self) -> bool {
-        Hasher::digest(self.rlp_bytes()) == self.hash
+    pub fn check_hash(&self) -> ProtocolResult<()> {
+        let calc_hash =
+            Hasher::digest(&self.unsigned.encode(self.chain_id, self.signature.clone()));
+        if self.hash != calc_hash {
+            return Err(TypesError::TxHashMismatch {
+                origin: self.hash,
+                calc:   calc_hash,
+            }
+            .into());
+        }
+
+        Ok(())
     }
 
     pub fn signature_hash(&self) -> Hash {
@@ -76,28 +87,29 @@ impl UnverifiedTransaction {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Default, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct SignatureComponents {
-    pub r:          H256,
-    pub s:          H256,
+    pub r:          Bytes,
+    pub s:          Bytes,
     pub standard_v: u8,
 }
 
 impl From<Bytes> for SignatureComponents {
+    // assume that all the bytes data are in Ethereum-like format
     fn from(bytes: Bytes) -> Self {
         debug_assert!(bytes.len() == 65);
         SignatureComponents {
-            r:          H256::from_slice(&bytes[0..32]),
-            s:          H256::from_slice(&bytes[32..64]),
-            standard_v: *bytes.as_ref().to_vec().last().unwrap(),
+            r:          Bytes::from(bytes[0..32].to_vec()),
+            s:          Bytes::from(bytes[32..64].to_vec()),
+            standard_v: bytes[64],
         }
     }
 }
 
 impl From<SignatureComponents> for Bytes {
     fn from(sc: SignatureComponents) -> Self {
-        let mut bytes = BytesMut::from(sc.r.as_bytes());
-        bytes.extend_from_slice(sc.s.as_bytes());
+        let mut bytes = BytesMut::from(sc.r.as_ref());
+        bytes.extend_from_slice(sc.s.as_ref());
         bytes.extend_from_slice(&[sc.standard_v]);
         bytes.freeze()
     }
@@ -106,6 +118,10 @@ impl From<SignatureComponents> for Bytes {
 impl SignatureComponents {
     pub fn as_bytes(&self) -> Bytes {
         self.clone().into()
+    }
+
+    pub fn is_eth_sig(&self) -> bool {
+        self.standard_v <= 1
     }
 }
 
@@ -128,13 +144,13 @@ impl TryFrom<UnverifiedTransaction> for SignedTransaction {
         let public = Public::from_slice(
             &secp256k1_recover(
                 hash.as_bytes(),
-                utx.signature.clone().unwrap().as_bytes().as_ref(),
+                utx.signature.as_ref().unwrap().as_bytes().as_ref(),
             )?
             .serialize_uncompressed()[1..65],
         );
 
         Ok(SignedTransaction {
-            transaction: utx,
+            transaction: utx.calc_hash(),
             sender:      public_to_address(&public),
             public:      Some(public),
         })

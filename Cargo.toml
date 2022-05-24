@@ -6,18 +6,11 @@ edition = "2021"
 repository = "https://github.com/nervosnetwork/axon"
 
 [dependencies]
-byzantine = { path = "./byzantine" }
-common-apm = { path = "./common/apm" }
-common-config-parser = { path = "./common/config-parser" }
-common-crypto = { path = "./common/crypto" }
-common-logger = { path = "./common/logger" }
+# byzantine = { path = "./byzantine" }
 core-api = { path = "./core/api" }
 core-cli = { path = "./core/cli" }
 core-consensus = { path = "./core/consensus" }
-core-mempool = { path = "./core/mempool" }
-core-network = { path = "./core/network" }
-core-storage = { path = "./core/storage" }
-protocol = { path = "./protocol", package = "axon-protocol" }
+core-run = { path = "./core/run" }
 
 [workspace]
 members = [
@@ -29,6 +22,7 @@ members = [
     "common/config-parser",
     "common/crypto",
     "common/logger",
+    "common/memory-tracker",
     "common/merkle",
     "common/pubsub",
 
@@ -40,6 +34,7 @@ members = [
     "core/mempool",
     "core/metadata",
     "core/network",
+    "core/rpc-client",
     "core/run",
     "core/storage",
     "devtools/keypair",
@@ -49,6 +44,17 @@ members = [
 
 [features]
 default = []
-random_leader = ["core-consensus/random_leader"]
+jemalloc = ["core-run/jemalloc"]
 pprof = ["core-api/pprof"]
+random_leader = ["core-consensus/random_leader"]
 # tentacle_metrics = ["core-network/tentacle_metrics"]
+
+[profile.release]
+overflow-checks = true
+opt-level = 3
+
+[profile.release-jemalloc]
+inherits = "release"
+debug = true
+overflow-checks = true
+opt-level = 3

@@ -1,0 +1,28 @@
+[package]
+name = "core-interoperation"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+arc-swap = "1.5"
+ckb-types = "0.103"
+lazy_static = "1.4"
+log = "0.4"
+
+protocol = { path = "../../protocol", package = "axon-protocol" }
+
+[target.'cfg(not(target_arch = "aarch64"))'.dependencies]
+ckb-vm = { version = "0.21", features = ["aot"] }
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+ckb-vm = { version = "0.21", features = ["asm"] }
+
+[dev-dependencies]
+cardano-serialization-lib = "7.0"
+cardano-message-signing = { git = "https://github.com/ashuralyk/message-signing", branch = "rust" }
+ed25519-dalek = "1.0"
+rand = "0.7"
+
+core-rpc-client = { path = "../../core/rpc-client" }

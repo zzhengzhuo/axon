@@ -10,21 +10,24 @@ async-trait = "0.1"
 bincode = "1.3"
 bytes = { version = "1.1", features = ["serde"] }
 
+ckb-hash = "0.103"
+ckb-jsonrpc-types = "0.103"
+ckb-types = "0.103.0"
 common-crypto = { path = "../common/crypto" }
 creep = "0.2"
 derive_more = "0.99"
-ethereum = "0.11"
-ethereum-types = "0.12"
-evm = { version = "0.33", features = ["with-codec", "with-serde"] }
+ethereum = { version = "0.12", features = ["with-codec", "with-serde"] }
+ethereum-types = { version = "0.13", features = ["arbitrary", "codec", "rlp", "serialize", "std"] }
+evm = { version = "0.35", features = ["with-serde"] }
+faster-hex = "0.6"
 hasher = { version = "0.1", features = ["hash-keccak"] }
-hex-simd = "0.5"
 lazy_static = "1.4"
 ophelia = "0.3"
 ophelia-secp256k1 = "0.3"
 overlord = "0.3"
 rlp = "0.5"
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.17", features = ["full"] }
+tokio = { version = "1.18", features = ["full"] }
 
 [dev-dependencies]
 getrandom = "0.2"
